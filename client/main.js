@@ -1,7 +1,12 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const os = require('os');
+
+// Desactivar aceleración de hardware para evitar errores en versiones Windows N/KN
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch('disable-features', 'MediaFoundation');
 
 // Almacenar la ventana principal globalmente para evitar que se cierre por recolección de basura
 let mainWindow;
@@ -96,5 +101,62 @@ ipcMain.handle('launch-warcraft', async (event, warcraftPath) => {
   } catch (error) {
     mainWindow.webContents.send('warcraft-error', error.message);
     return false;
+  }
+});
+
+// Manejar la apertura del documento de solución de problemas
+ipcMain.handle('open-troubleshooting', async () => {
+  const troubleshootingPath = path.join(__dirname, 'SOLUCION_PROBLEMAS.md');
+  
+  // Si el sistema puede abrir archivos .md directamente
+  try {
+    await shell.openPath(troubleshootingPath);
+    return true;
+  } catch (error) {
+    // Si falla, mostrar el contenido en una ventana
+    try {
+      const content = fs.readFileSync(troubleshootingPath, 'utf8');
+      
+      const troubleshootWindow = new BrowserWindow({
+        width: 800,
+        height: 600,
+        parent: mainWindow,
+        modal: true,
+        webPreferences: {
+          nodeIntegration: true,
+          contextIsolation: false
+        }
+      });
+      
+      // Crear archivo HTML temporal
+      const tempHtmlPath = path.join(app.getPath('temp'), 'troubleshooting.html');
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>Solución de Problemas</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; line-height: 1.6; }
+            h1 { color: #0059b2; }
+            h2 { color: #0069d9; margin-top: 20px; }
+            pre { background-color: #f5f5f5; padding: 10px; border-radius: 5px; }
+            a { color: #0069d9; }
+          </style>
+        </head>
+        <body>
+          <div id="content">${content.replace(/\n/g, '<br>').replace(/\`\`\`(.*?)\`\`\`/g, '<pre>$1</pre>')}</div>
+        </body>
+        </html>
+      `;
+      
+      fs.writeFileSync(tempHtmlPath, htmlContent);
+      troubleshootWindow.loadFile(tempHtmlPath);
+      
+      return true;
+    } catch (fsError) {
+      console.error('Error al abrir solución de problemas:', fsError);
+      return false;
+    }
   }
 }); 
