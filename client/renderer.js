@@ -32,6 +32,8 @@ let socket = null;
 let currentUser = null;
 let currentRoom = null;
 let p2pConnections = {};
+let connectionAttempts = {}; // Rastrear intentos de conexión para evitar duplicados
+let isConnecting = false; // Bloquear múltiples intentos simultáneos
 
 // Cargar configuración guardada
 document.addEventListener('DOMContentLoaded', () => {
@@ -207,10 +209,28 @@ function setupSocketEvents(username) {
     socket.on('connection-offer', async (data) => {
         const { from, fromUsername, offer } = data;
         console.log(`Oferta de conexión recibida de ${fromUsername}`);
+        
+        // Evitar procesar ofertas duplicadas en un corto periodo de tiempo
+        if (connectionAttempts[from] && (Date.now() - connectionAttempts[from]) < 2000) {
+            console.log('Ignorando oferta duplicada');
+            return;
+        }
+        
+        connectionAttempts[from] = Date.now();
         addChatMessage('Sistema', `${fromUsername} quiere conectarse contigo`);
         
         // Crear respuesta a la oferta
         try {
+            // Cerrar conexión previa si existe
+            if (p2pConnections[from]) {
+                try {
+                    p2pConnections[from].close();
+                    delete p2pConnections[from];
+                } catch (err) {
+                    console.log('Error al cerrar conexión anterior:', err);
+                }
+            }
+            
             // Crear conexión P2P para este peer
             const peerConnection = createPeerConnection(from);
             
@@ -237,13 +257,16 @@ function setupSocketEvents(username) {
             
             // Esperar a que se recojan algunos candidatos ICE antes de enviar la respuesta
             setTimeout(() => {
-                // Enviar respuesta al peer
-                socket.emit('connection-answer', {
-                    targetId: from,
-                    answer: peerConnection.localDescription
-                });
-                
-                addChatMessage('Sistema', `Respuesta enviada a ${fromUsername}`);
+                // Verificar si aún tenemos la conexión
+                if (p2pConnections[from]) {
+                    // Enviar respuesta al peer
+                    socket.emit('connection-answer', {
+                        targetId: from,
+                        answer: peerConnection.localDescription
+                    });
+                    
+                    addChatMessage('Sistema', `Respuesta enviada a ${fromUsername}`);
+                }
             }, 1000);
             
         } catch (error) {
@@ -315,12 +338,20 @@ function setupSocketEvents(username) {
 
 // Crear conexión P2P
 function createPeerConnection(peerId) {
-    // Configuración de STUN/TURN servers
+    // Configuración de STUN/TURN servers mejorada
     const peerConnection = new RTCPeerConnection({
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-        ]
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' }
+        ],
+        iceTransportPolicy: 'all',
+        iceCandidatePoolSize: 10,
+        // Configuración extra para mejorar conexiones con NAT
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require'
     });
     
     // Guardar la conexión en el mapa de conexiones
@@ -330,6 +361,29 @@ function createPeerConnection(peerId) {
     peerConnection.onconnectionstatechange = () => {
         console.log(`Estado de conexión con ${peerId}: ${peerConnection.connectionState}`);
         addChatMessage('Sistema', `Estado de conexión: ${peerConnection.connectionState}`);
+        
+        // Marcar como no conectando cuando la conexión está establecida o ha fallado
+        if (peerConnection.connectionState === 'connected' || 
+            peerConnection.connectionState === 'failed' ||
+            peerConnection.connectionState === 'disconnected' ||
+            peerConnection.connectionState === 'closed') {
+            isConnecting = false;
+        }
+        
+        // Limpiar conexión fallida después de un tiempo
+        if (peerConnection.connectionState === 'failed' || 
+            peerConnection.connectionState === 'disconnected' ||
+            peerConnection.connectionState === 'closed') {
+            setTimeout(() => {
+                if (p2pConnections[peerId] === peerConnection) {
+                    delete p2pConnections[peerId];
+                    console.log(`Conexión eliminada para ${peerId}`);
+                }
+            }, 5000);
+        }
+        
+        // Actualizar la interfaz para reflejar el nuevo estado
+        refreshPlayers();
     };
     
     // Manejar candidatos ICE
@@ -341,6 +395,14 @@ function createPeerConnection(peerId) {
                 candidate: event.candidate
             });
         }
+    };
+    
+    peerConnection.onicecandidateerror = (event) => {
+        console.error('Error de candidato ICE:', event);
+    };
+    
+    peerConnection.oniceconnectionstatechange = () => {
+        console.log(`Estado de conexión ICE: ${peerConnection.iceConnectionState}`);
     };
     
     // Manejar canal de datos
@@ -359,14 +421,28 @@ function createPeerConnection(peerId) {
 
 // Configurar canal de datos
 function setupDataChannel(dataChannel, peerId) {
+    // Almacenar el canal de datos en la conexión
+    if (p2pConnections[peerId]) {
+        p2pConnections[peerId].dataChannel = dataChannel;
+    }
+    
     dataChannel.onopen = () => {
         console.log(`Canal de datos abierto con ${peerId}`);
         addChatMessage('Sistema', `Conexión establecida con otro jugador`);
+        // Activar el botón de lanzar juego
+        updateLaunchButton();
     };
     
     dataChannel.onclose = () => {
         console.log(`Canal de datos cerrado con ${peerId}`);
         addChatMessage('Sistema', `Conexión cerrada con otro jugador`);
+        // Actualizar el botón de lanzar juego
+        updateLaunchButton();
+    };
+    
+    dataChannel.onerror = (error) => {
+        console.error(`Error en canal de datos: ${error}`);
+        addChatMessage('Sistema', `Error en la conexión: ${error}`);
     };
     
     dataChannel.onmessage = (event) => {
@@ -382,6 +458,10 @@ function setupDataChannel(dataChannel, peerId) {
                     // Procesar comandos de juego aquí
                     console.log('Comando de juego recibido:', message);
                     break;
+                case 'ping':
+                    // Responder al ping para mantener la conexión viva
+                    sendP2PMessage(peerId, { type: 'pong', timestamp: Date.now() });
+                    break;
                 default:
                     console.log('Mensaje desconocido recibido:', message);
             }
@@ -391,23 +471,75 @@ function setupDataChannel(dataChannel, peerId) {
     };
 }
 
+// Función para enviar mensajes P2P
+function sendP2PMessage(peerId, message) {
+    try {
+        const connection = p2pConnections[peerId];
+        if (connection && connection.dataChannel && connection.dataChannel.readyState === 'open') {
+            connection.dataChannel.send(JSON.stringify(message));
+            return true;
+        }
+        return false;
+    } catch (error) {
+        console.error('Error al enviar mensaje P2P:', error);
+        return false;
+    }
+}
+
 // Iniciar una conexión P2P con otro jugador
 async function connectToPlayer(playerId) {
     try {
+        // Evitar múltiples intentos simultáneos
+        if (isConnecting) {
+            addChatMessage('Sistema', `Ya hay una conexión en curso, espera un momento...`);
+            return;
+        }
+        
+        // Evitar conexiones duplicadas
+        if (p2pConnections[playerId] && 
+            (p2pConnections[playerId].connectionState === 'connected' || 
+             p2pConnections[playerId].connectionState === 'connecting')) {
+            addChatMessage('Sistema', `Ya existe una conexión con este jugador`);
+            return;
+        }
+        
+        // Evitar reconexiones demasiado frecuentes
+        if (connectionAttempts[playerId] && (Date.now() - connectionAttempts[playerId]) < 5000) {
+            addChatMessage('Sistema', `Espera unos segundos antes de intentar conectarte de nuevo`);
+            return;
+        }
+        
+        isConnecting = true;
+        connectionAttempts[playerId] = Date.now();
+        
         addChatMessage('Sistema', `Intentando conectar con otro jugador...`);
+        
+        // Cerrar conexión previa si existe
+        if (p2pConnections[playerId]) {
+            try {
+                p2pConnections[playerId].close();
+                delete p2pConnections[playerId];
+            } catch (err) {
+                console.log('Error al cerrar conexión anterior:', err);
+            }
+        }
         
         // Crear conexión P2P
         const peerConnection = createPeerConnection(playerId);
         
-        // Crear canal de datos
-        const dataChannel = peerConnection.createDataChannel('game-data');
+        // Crear canal de datos con configuración optimizada
+        const dataChannel = peerConnection.createDataChannel('game-data', {
+            ordered: true,
+            maxRetransmits: 3
+        });
         setupDataChannel(dataChannel, playerId);
         peerConnection.dataChannel = dataChannel;
         
         // Crear oferta con restricciones específicas para mejorar compatibilidad
         const offerOptions = {
             offerToReceiveAudio: false,
-            offerToReceiveVideo: false
+            offerToReceiveVideo: false,
+            iceRestart: true // Añadido para mejorar reconexiones
         };
         
         const offer = await peerConnection.createOffer(offerOptions);
@@ -415,24 +547,41 @@ async function connectToPlayer(playerId) {
         
         // Esperar a que se generen los candidatos ICE antes de enviar la oferta
         setTimeout(() => {
-            // Enviar oferta al jugador
-            socket.emit('connection-request', {
-                targetId: playerId,
-                offer: peerConnection.localDescription
-            });
-            
-            addChatMessage('Sistema', `Oferta enviada, esperando respuesta...`);
-        }, 1000); // Dar tiempo para recopilar candidatos ICE
+            // Verificar si aún estamos intentando conectar con este peer
+            if (p2pConnections[playerId]) {
+                // Enviar oferta al jugador
+                socket.emit('connection-request', {
+                    targetId: playerId,
+                    offer: peerConnection.localDescription
+                });
+                
+                addChatMessage('Sistema', `Oferta enviada, esperando respuesta...`);
+                
+                // Establecer un timeout para la conexión
+                setTimeout(() => {
+                    if (p2pConnections[playerId] && p2pConnections[playerId].connectionState !== 'connected') {
+                        addChatMessage('Sistema', `La conexión está tardando demasiado. Intenta nuevamente.`);
+                        isConnecting = false;
+                    }
+                }, 15000);
+            } else {
+                addChatMessage('Sistema', `Conexión cancelada`);
+                isConnecting = false;
+            }
+        }, 1000);
         
     } catch (error) {
         console.error('Error al conectar con jugador:', error);
         addChatMessage('Sistema', `Error al conectar: ${error.message}`);
+        isConnecting = false;
     }
 }
 
 // Actualizar lista de jugadores
 function refreshPlayers() {
-    socket.emit('get-clients');
+    if (socket && socket.connected) {
+        socket.emit('get-clients');
+    }
 }
 
 // Renderizar lista de jugadores
@@ -448,10 +597,36 @@ function renderPlayersList(players) {
         // No mostrar al jugador actual
         if (player.id === currentUser?.id) return;
         
+        // Verificar si ya existe una conexión P2P con este jugador
+        const connection = p2pConnections[player.id];
+        const connectionState = connection ? connection.connectionState : null;
+        
+        // Determinar el texto y la clase del botón según el estado
+        let buttonText = 'Conectar';
+        let buttonClass = 'btn-primary';
+        let isDisabled = false;
+        
+        if (connectionState === 'connecting') {
+            buttonText = 'Conectando...';
+            buttonClass = 'btn-warning';
+            isDisabled = true;
+        } else if (connectionState === 'connected') {
+            buttonText = 'Conectado';
+            buttonClass = 'btn-success';
+            isDisabled = true;
+        } else if (connectionState === 'disconnected' || connectionState === 'failed') {
+            buttonText = 'Reconectar';
+            buttonClass = 'btn-danger';
+        }
+        
+        // Agregar el botón de conexión con el estado apropiado
         html += `
             <div class="game-card d-flex justify-content-between align-items-center">
                 <div>${player.username}</div>
-                <button class="btn btn-sm btn-primary connect-player" data-id="${player.id}">Conectar</button>
+                <button class="btn btn-sm ${buttonClass} connect-player" 
+                    data-id="${player.id}" ${isDisabled ? 'disabled' : ''}>
+                    ${buttonText}
+                </button>
             </div>
         `;
     });
@@ -466,6 +641,15 @@ function renderPlayersList(players) {
             button.addEventListener('click', (e) => {
                 const playerId = e.target.getAttribute('data-id');
                 connectToPlayer(playerId);
+                
+                // Actualizar inmediatamente el estado visual del botón
+                e.target.textContent = 'Conectando...';
+                e.target.classList.remove('btn-primary', 'btn-danger');
+                e.target.classList.add('btn-warning');
+                e.target.disabled = true;
+                
+                // Programar una actualización de la lista después de un tiempo
+                setTimeout(() => refreshPlayers(), 2000);
             });
         });
     }
@@ -589,21 +773,21 @@ function sendChatMessage(text) {
         text
     };
     
+    let messageSent = false;
+    
     // Enviar a todos los peers
-    Object.values(p2pConnections).forEach(connection => {
-        try {
-            // Buscar el canal de datos
-            const dataChannel = connection.dataChannel;
-            if (dataChannel && dataChannel.readyState === 'open') {
-                dataChannel.send(JSON.stringify(message));
-            }
-        } catch (error) {
-            console.error('Error al enviar mensaje:', error);
+    Object.keys(p2pConnections).forEach(peerId => {
+        if (sendP2PMessage(peerId, message)) {
+            messageSent = true;
         }
     });
     
     // Mostrar localmente
-    addChatMessage(currentUser.username, text);
+    if (messageSent || true) { // Siempre mostramos el mensaje localmente
+        addChatMessage(currentUser.username, text);
+    }
+    
+    return messageSent;
 }
 
 // Agregar mensaje al chat
