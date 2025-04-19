@@ -62,11 +62,23 @@ selectWarcraftPathBtn.addEventListener('click', async () => {
 
 // Actualizar el estado del botón de inicio de juego
 function updateLaunchButton() {
-    if (warcraftPathInput.value && currentRoom) {
+    // Verificar si tenemos una ruta de Warcraft válida
+    const hasWarcraftPath = !!warcraftPathInput.value;
+    
+    // Verificar si tenemos al menos una conexión P2P activa
+    const hasActivePeerConnection = Object.values(p2pConnections).some(conn => 
+        conn.connectionState === 'connected' && conn.dataChannel && conn.dataChannel.readyState === 'open'
+    );
+    
+    // Habilitar el botón si se cumplen ambas condiciones
+    if (hasWarcraftPath && hasActivePeerConnection) {
         launchGameBtn.disabled = false;
+        addChatMessage('Sistema', `El botón "Iniciar Warcraft III" ha sido habilitado. Puedes lanzar el juego ahora.`);
     } else {
         launchGameBtn.disabled = true;
     }
+    
+    console.log(`Estado del botón de lanzamiento: ${!launchGameBtn.disabled} (Path: ${hasWarcraftPath}, Connection: ${hasActivePeerConnection})`);
 }
 
 // Conectar al servidor
@@ -429,8 +441,15 @@ function setupDataChannel(dataChannel, peerId) {
     dataChannel.onopen = () => {
         console.log(`Canal de datos abierto con ${peerId}`);
         addChatMessage('Sistema', `Conexión establecida con otro jugador`);
+        
+        // Cambiar automáticamente a la pestaña de juego
+        gameTabEl.show();
+        
         // Activar el botón de lanzar juego
         updateLaunchButton();
+        
+        // Notificar al usuario sobre los siguientes pasos
+        addChatMessage('Sistema', `Ya puedes chatear y lanzar Warcraft III. La conexión P2P está activa.`);
     };
     
     dataChannel.onclose = () => {
