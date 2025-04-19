@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Warcraft P2P Launcher</title>
+  <link rel="stylesheet" href="./node_modules/bootstrap/dist/css/bootstrap.min.css">
+  <style>
+    body {
+      background-color: #0a1929;
+      color: #ddd;
+      font-family: Arial, sans-serif;
+    }
+    .card {
+      background-color: #132f4c;
+      color: #ddd;
+      border: 1px solid #1e4976;
+    }
+    .btn-primary {
+      background-color: #0059b2;
+      border-color: #004c99;
+    }
+    .btn-primary:hover {
+      background-color: #0069d9;
+    }
+    .game-card {
+      border: 1px solid #1e4976;
+      border-radius: 5px;
+      padding: 10px;
+      margin-bottom: 10px;
+      background-color: #132f4c;
+    }
+    .game-card:hover {
+      background-color: #173d5d;
+      cursor: pointer;
+    }
+    .status-connected {
+      color: #4caf50;
+    }
+    .status-disconnected {
+      color: #f44336;
+    }
+    #chat-box {
+      height: 200px;
+      overflow-y: auto;
+      background-color: #0a1929;
+      padding: 10px;
+      border: 1px solid #1e4976;
+      border-radius: 5px;
+    }
+    .nav-tabs .nav-link {
+      color: #ddd;
+    }
+    .nav-tabs .nav-link.active {
+      background-color: #132f4c;
+      color: #fff;
+      border-color: #1e4976;
+    }
+  </style>
+</head>
+<body>
+  <div class="container mt-4">
+    <div class="row">
+      <div class="col-12 mb-4">
+        <h1 class="text-center">Warcraft P2P Launcher</h1>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col-md-8 offset-md-2">
+        <div class="card mb-4">
+          <div class="card-header">
+            <ul class="nav nav-tabs card-header-tabs" id="myTab" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="setup-tab" data-bs-toggle="tab" data-bs-target="#setup" type="button" role="tab" aria-controls="setup" aria-selected="true">Configuración</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="lobby-tab" data-bs-toggle="tab" data-bs-target="#lobby" type="button" role="tab" aria-controls="lobby" aria-selected="false">Lobby</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="game-tab" data-bs-toggle="tab" data-bs-target="#game" type="button" role="tab" aria-controls="game" aria-selected="false">Juego</button>
+              </li>
+            </ul>
+          </div>
+          <div class="card-body">
+            <div class="tab-content" id="myTabContent">
+              <!-- Pestaña de Configuración -->
+              <div class="tab-pane fade show active" id="setup" role="tabpanel" aria-labelledby="setup-tab">
+                <h5 class="card-title">Configuración</h5>
+                
+                <div class="mb-3">
+                  <label for="username" class="form-label">Nombre de usuario</label>
+                  <input type="text" class="form-control" id="username" placeholder="Ingresa tu nombre de usuario">
+                </div>
+                
+                <div class="mb-3">
+                  <label for="server-url" class="form-label">URL del servidor</label>
+                  <input type="text" class="form-control" id="server-url" value="http://45.77.113.226:3000">
+                </div>
+
+                <div class="mb-3">
+                  <label for="warcraft-path" class="form-label">Ruta de Warcraft III</label>
+                  <div class="input-group">
+                    <input type="text" class="form-control" id="warcraft-path" readonly>
+                    <button class="btn btn-primary" id="select-warcraft-path">Buscar</button>
+                  </div>
+                </div>
+
+                <div class="d-grid gap-2">
+                  <button id="connect-btn" class="btn btn-primary">Conectar al servidor</button>
+                </div>
+                
+                <div class="mt-3">
+                  <p>Estado: <span id="connection-status" class="status-disconnected">Desconectado</span></p>
+                </div>
+              </div>
+              
+              <!-- Pestaña de Lobby -->
+              <div class="tab-pane fade" id="lobby" role="tabpanel" aria-labelledby="lobby-tab">
+                <h5 class="card-title">Lobby</h5>
+                
+                <div class="mb-3">
+                  <div class="d-flex justify-content-between align-items-center">
+                    <h6>Jugadores conectados</h6>
+                    <button id="refresh-players" class="btn btn-sm btn-primary">Actualizar</button>
+                  </div>
+                  <div id="players-list" class="mt-2">
+                    <p class="text-muted">No hay jugadores conectados</p>
+                  </div>
+                </div>
+
+                <div class="mb-3">
+                  <div class="d-flex justify-content-between align-items-center">
+                    <h6>Partidas disponibles</h6>
+                    <button id="create-game" class="btn btn-sm btn-primary">Crear partida</button>
+                  </div>
+                  <div id="games-list" class="mt-2">
+                    <p class="text-muted">No hay partidas disponibles</p>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Pestaña de Juego -->
+              <div class="tab-pane fade" id="game" role="tabpanel" aria-labelledby="game-tab">
+                <h5 class="card-title">Partida en curso</h5>
+                
+                <div class="mb-3">
+                  <h6>Jugadores en partida</h6>
+                  <div id="game-players-list">
+                    <p class="text-muted">No hay jugadores en la partida</p>
+                  </div>
+                </div>
+
+                <div class="mb-3">
+                  <h6>Chat</h6>
+                  <div id="chat-box" class="mb-2"></div>
+                  <div class="input-group">
+                    <input type="text" class="form-control" id="chat-input" placeholder="Escribe un mensaje...">
+                    <button class="btn btn-primary" id="send-chat">Enviar</button>
+                  </div>
+                </div>
+
+                <div class="d-grid gap-2">
+                  <button id="launch-game" class="btn btn-primary" disabled>Iniciar Warcraft III</button>
+                  <button id="leave-game" class="btn btn-danger">Abandonar partida</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="./node_modules/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="./renderer.js"></script>
+</body>
+</html> 
