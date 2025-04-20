@@ -450,11 +450,20 @@ function setupDataChannel(dataChannel, peerId) {
         
         // Notificar al usuario sobre los siguientes pasos
         addChatMessage('Sistema', `Ya puedes chatear y lanzar Warcraft III. La conexión P2P está activa.`);
+        
+        // Habilitar el input de chat
+        chatInput.disabled = false;
+        sendChatBtn.disabled = false;
     };
     
     dataChannel.onclose = () => {
         console.log(`Canal de datos cerrado con ${peerId}`);
         addChatMessage('Sistema', `Conexión cerrada con otro jugador`);
+        
+        // Deshabilitar el input de chat
+        chatInput.disabled = true;
+        sendChatBtn.disabled = true;
+        
         // Actualizar el botón de lanzar juego
         updateLaunchButton();
     };
@@ -796,14 +805,22 @@ function sendChatMessage(text) {
     
     // Enviar a todos los peers
     Object.keys(p2pConnections).forEach(peerId => {
-        if (sendP2PMessage(peerId, message)) {
-            messageSent = true;
+        const connection = p2pConnections[peerId];
+        if (connection && connection.dataChannel && connection.dataChannel.readyState === 'open') {
+            try {
+                connection.dataChannel.send(JSON.stringify(message));
+                messageSent = true;
+            } catch (error) {
+                console.error('Error al enviar mensaje:', error);
+            }
         }
     });
     
     // Mostrar localmente
-    if (messageSent || true) { // Siempre mostramos el mensaje localmente
+    if (messageSent) {
         addChatMessage(currentUser.username, text);
+    } else {
+        addChatMessage('Sistema', 'No hay conexiones activas para enviar el mensaje');
     }
     
     return messageSent;
@@ -830,11 +847,23 @@ launchGameBtn.addEventListener('click', async () => {
     }
     
     try {
+        // Verificar que tenemos al menos una conexión P2P activa
+        const hasActiveConnection = Object.values(p2pConnections).some(conn => 
+            conn.connectionState === 'connected' && conn.dataChannel && conn.dataChannel.readyState === 'open'
+        );
+        
+        if (!hasActiveConnection) {
+            alert('No hay conexiones P2P activas. Conéctate con otro jugador primero.');
+            return;
+        }
+        
+        // Lanzar Warcraft
         const result = await window.ipcRenderer.invoke('launch-warcraft', warcraftPath);
         
         if (result) {
-            // Mostrar mensaje en el chat
             addChatMessage('Sistema', 'Warcraft ha sido iniciado');
+            // Deshabilitar el botón después de iniciar
+            launchGameBtn.disabled = true;
         } else {
             alert('Error al iniciar Warcraft');
         }
