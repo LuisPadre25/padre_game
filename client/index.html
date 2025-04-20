@@ -3,311 +3,249 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Warcraft III P2P Launcher</title>
-  <link rel="stylesheet" href="../node_modules/bootstrap/dist/css/bootstrap.min.css">
-  <link rel="stylesheet" href="../node_modules/@fortawesome/fontawesome-free/css/all.min.css">
+  <title>Warcraft P2P Launcher</title>
+  <link rel="stylesheet" href="./node_modules/bootstrap/dist/css/bootstrap.min.css">
   <style>
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      padding: 20px;
-      background-color: #f8f9fa;
+      background-color: #0a1929;
+      color: #ddd;
+      font-family: Arial, sans-serif;
     }
-
-    .connection-banner {
-      padding: 10px 15px;
-      margin-bottom: 15px;
-      border-radius: 4px;
-      transition: all 0.3s ease;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+    .card {
+      background-color: #132f4c;
+      color: #ddd;
+      border: 1px solid #1e4976;
     }
-
-    .connected {
-      background-color: #d4edda;
-      color: #155724;
-      border: 1px solid #c3e6cb;
+    .btn-primary {
+      background-color: #0059b2;
+      border-color: #004c99;
     }
-
-    .reconnecting {
-      background-color: #fff3cd;
-      color: #856404;
-      border: 1px solid #ffeeba;
+    .btn-primary:hover {
+      background-color: #0069d9;
     }
-
-    .disconnected {
-      background-color: #f8d7da;
-      color: #721c24;
-      border: 1px solid #f5c6cb;
-    }
-
-    .chat-message {
-      padding: 8px 12px;
-      margin-bottom: 8px;
-      border-radius: 4px;
-      background-color: #e9ecef;
-    }
-
-    .chat-message.info {
-      background-color: #cce5ff;
-      color: #004085;
-    }
-
-    .chat-message.success {
-      background-color: #d4edda;
-      color: #155724;
-    }
-
-    .chat-message.warning {
-      background-color: #fff3cd;
-      color: #856404;
-    }
-
-    .chat-message.error {
-      background-color: #f8d7da;
-      color: #721c24;
-    }
-
-    #chat-messages {
-      height: 300px;
-      overflow-y: auto;
+    .game-card {
+      border: 1px solid #1e4976;
+      border-radius: 5px;
+      padding: 10px;
       margin-bottom: 10px;
-      border: 1px solid #ced4da;
-      border-radius: 4px;
+      background-color: #132f4c;
+    }
+    .game-card:hover {
+      background-color: #173d5d;
+      cursor: pointer;
+    }
+    .status-connected {
+      color: #4caf50;
+    }
+    .status-disconnected {
+      color: #f44336;
+    }
+    #chat-box {
+      height: 200px;
+      overflow-y: auto;
+      background-color: #0a1929;
       padding: 10px;
-      background-color: #fff;
+      border: 1px solid #1e4976;
+      border-radius: 5px;
     }
-
-    #chat-input-group {
-      display: flex;
+    /* Estilos mejorados para mensajes de chat */
+    #chat-box div {
+      padding: 5px 8px;
+      margin-bottom: 6px;
+      border-radius: 8px;
+      background-color: #132f4c;
+      word-wrap: break-word;
     }
-
-    #chat-input {
-      flex-grow: 1;
-      margin-right: 10px;
+    /* Estilo para mensajes propios */
+    #chat-box .own-message {
+      background-color: #0d4714;
+      text-align: right;
+      border-left: none;
+      border-right: 3px solid #4caf50;
     }
-
-    .network-status {
-      display: inline-block;
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      margin-right: 5px;
+    /* Estilo para mensajes del sistema */
+    #chat-box div strong:first-child:contains('Sistema') + * {
+      color: #ff9800;
     }
-
-    .network-status.online {
-      background-color: #28a745;
+    /* Estilo para nuevos mensajes - animación de entrada */
+    @keyframes newMessage {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
     }
-
-    .network-status.offline {
-      background-color: #dc3545;
+    #chat-box div:last-child {
+      animation: newMessage 0.3s ease-out;
     }
-
-    .tab-content {
-      padding: 15px;
-      background-color: #fff;
-      border: 1px solid #dee2e6;
-      border-top: none;
-      border-radius: 0 0 4px 4px;
+    .nav-tabs .nav-link {
+      color: #ddd;
     }
-
-    .alert-chat {
-      background-color: #e2f0fd;
-      border-left: 4px solid #17a2b8;
-      padding: 10px;
-      margin-bottom: 15px;
+    .nav-tabs .nav-link.active {
+      background-color: #132f4c;
+      color: #fff;
+      border-color: #1e4976;
     }
-
+    .help-text {
+      font-size: 0.85rem;
+      color: #aaa;
+      margin-top: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .alert-info {
+      background-color: #0c2d48;
+      color: #8ecdf7;
+      border-color: #0a5fa9;
+    }
+    /* Efecto pulsante para el botón de iniciar juego */
     @keyframes pulse {
-      0% { transform: scale(1); }
-      50% { transform: scale(1.05); }
-      100% { transform: scale(1); }
+      0% {
+        box-shadow: 0 0 0 0 rgba(0, 123, 255, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 10px rgba(0, 123, 255, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(0, 123, 255, 0);
+      }
     }
-
-    #launch-button:not([disabled]) {
+    
+    .pulse-button:not([disabled]) {
       animation: pulse 1.5s infinite;
     }
   </style>
 </head>
 <body>
-  <!-- Banner de estado de conexión -->
-  <div id="connection-banner" class="connection-banner" style="display: none;">
-    <span id="connection-status-message">Desconectado</span>
-    <span id="network-indicator">
-      <span class="network-status offline"></span>
-      <span id="network-status-text">Desconectado</span>
-    </span>
-  </div>
-
-  <!-- Formulario de conexión -->
-  <div id="connection-form" class="card mb-4">
-    <div class="card-header">
-      <h4><i class="fas fa-plug"></i> Conectar al servidor</h4>
-    </div>
-    <div class="card-body">
-      <div class="form-group mb-3">
-        <label for="server-address">Dirección del servidor:</label>
-        <input type="text" id="server-address" class="form-control" placeholder="http://localhost:3000" value="http://45.77.113.226:3000">
+  <div class="container mt-4">
+    <div class="row">
+      <div class="col-12 mb-4">
+        <h1 class="text-center">Warcraft P2P Launcher</h1>
       </div>
-      <div class="form-group mb-3">
-        <label for="username">Nombre de usuario:</label>
-        <input type="text" id="username" class="form-control" placeholder="Tu nombre de usuario">
-      </div>
-      <div class="form-group mb-3">
-        <label for="room-id">ID de la sala:</label>
-        <input type="text" id="room-id" class="form-control" placeholder="Nombre de la sala">
-      </div>
-      <button id="connect-button" class="btn btn-primary">
-        <i class="fas fa-sign-in-alt"></i> Conectar
-      </button>
-    </div>
-  </div>
-
-  <!-- Información del juego (visible después de conectar) -->
-  <div id="game-info" style="display: none;">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <div>
-        <h4>
-          <span class="badge bg-primary">Sala: <span id="room-id-display"></span></span>
-          <span class="badge bg-secondary">Usuario: <span id="username-display"></span></span>
-        </h4>
-      </div>
-      <button id="disconnect-button" class="btn btn-danger">
-        <i class="fas fa-sign-out-alt"></i> Desconectar
-      </button>
     </div>
 
-    <!-- Tabs de navegación -->
-    <ul class="nav nav-tabs" id="myTab" role="tablist">
-      <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="players-tab" data-bs-toggle="tab" data-bs-target="#players-content" type="button" role="tab" aria-controls="players" aria-selected="true">
-          <i class="fas fa-users"></i> Jugadores
-        </button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="nav-link" id="game-tab" data-bs-toggle="tab" data-bs-target="#game-content" type="button" role="tab" aria-controls="game" aria-selected="false">
-          <i class="fas fa-gamepad"></i> Juego
-        </button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="nav-link" id="chat-tab" data-bs-toggle="tab" data-bs-target="#chat-content" type="button" role="tab" aria-controls="chat" aria-selected="false">
-          <i class="fas fa-comments"></i> Chat
-        </button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="nav-link" id="help-tab" data-bs-toggle="tab" data-bs-target="#help-content" type="button" role="tab" aria-controls="help" aria-selected="false">
-          <i class="fas fa-question-circle"></i> Ayuda
-        </button>
-      </li>
-    </ul>
-
-    <!-- Contenido de los tabs -->
-    <div class="tab-content" id="myTabContent">
-      <!-- Tab de jugadores -->
-      <div class="tab-pane fade show active" id="players-content" role="tabpanel" aria-labelledby="players-tab">
-        <h5 class="mb-3"><i class="fas fa-users"></i> Jugadores en la sala</h5>
-        <div id="players-list" class="mb-3">
-          <div class="text-center">
-            <div class="spinner-border text-primary" role="status">
-              <span class="visually-hidden">Cargando...</span>
-            </div>
-            <p>Cargando jugadores...</p>
+    <div class="row">
+      <div class="col-md-8 offset-md-2">
+        <div class="card mb-4">
+          <div class="card-header">
+            <ul class="nav nav-tabs card-header-tabs" id="myTab" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="setup-tab" data-bs-toggle="tab" data-bs-target="#setup" type="button" role="tab" aria-controls="setup" aria-selected="true">Configuración</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="lobby-tab" data-bs-toggle="tab" data-bs-target="#lobby" type="button" role="tab" aria-controls="lobby" aria-selected="false">Lobby</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="game-tab" data-bs-toggle="tab" data-bs-target="#game" type="button" role="tab" aria-controls="game" aria-selected="false">Juego</button>
+              </li>
+            </ul>
           </div>
-        </div>
-      </div>
+          <div class="card-body">
+            <div class="tab-content" id="myTabContent">
+              <!-- Pestaña de Configuración -->
+              <div class="tab-pane fade show active" id="setup" role="tabpanel" aria-labelledby="setup-tab">
+                <h5 class="card-title">Configuración</h5>
+                
+                <div class="alert alert-info" role="alert">
+                  <strong>Paso 1:</strong> Configura tu nombre de usuario, la URL del servidor y selecciona la ubicación del juego.
+                </div>
+                
+                <div class="mb-3">
+                  <label for="username" class="form-label">Nombre de usuario</label>
+                  <input type="text" class="form-control" id="username" placeholder="Ingresa tu nombre de usuario">
+                </div>
+                
+                <div class="mb-3">
+                  <label for="server-url" class="form-label">URL del servidor</label>
+                  <input type="text" class="form-control" id="server-url" value="http://45.77.113.226:3000">
+                  <div class="help-text">El servidor de señalización P2P que coordina las conexiones entre jugadores</div>
+                </div>
 
-      <!-- Tab de juego -->
-      <div class="tab-pane fade" id="game-content" role="tabpanel" aria-labelledby="game-tab">
-        <h5 class="mb-3"><i class="fas fa-gamepad"></i> Configuración del juego</h5>
-        
-        <div class="alert alert-chat">
-          <i class="fas fa-info-circle"></i> <strong>Recuerda:</strong> Debes estar conectado con otro jugador para poder iniciar Warcraft III. Usa el chat para coordinar con tu compañero antes de lanzar el juego.
-        </div>
-        
-        <div class="form-group mb-3">
-          <label for="warcraft-path">Ruta de Warcraft III:</label>
-          <input type="text" id="warcraft-path" class="form-control" placeholder="C:\Program Files\Warcraft III\Warcraft III.exe">
-          <small class="form-text text-muted">Especifica la ruta completa al ejecutable de Warcraft III</small>
-        </div>
-        
-        <button id="launch-button" class="btn btn-success" disabled>
-          <i class="fas fa-play-circle"></i> Iniciar Warcraft III
-        </button>
-      </div>
+                <div class="mb-3">
+                  <label for="warcraft-path" class="form-label">Ruta de Warcraft III</label>
+                  <div class="input-group">
+                    <input type="text" class="form-control" id="warcraft-path" readonly>
+                    <button class="btn btn-primary" id="select-warcraft-path">Buscar</button>
+                  </div>
+                  <div class="help-text">Selecciona la ubicación del ejecutable de Warcraft III en tu computadora</div>
+                </div>
 
-      <!-- Tab de chat -->
-      <div class="tab-pane fade" id="chat-content" role="tabpanel" aria-labelledby="chat-tab">
-        <h5 class="mb-3"><i class="fas fa-comments"></i> Chat</h5>
-        
-        <div id="chat-messages"></div>
-        
-        <div id="chat-input-group" class="input-group">
-          <input type="text" id="chat-input" class="form-control" placeholder="Escribe un mensaje...">
-          <button id="send-button" class="btn btn-primary">
-            <i class="fas fa-paper-plane"></i> Enviar
-          </button>
-        </div>
-      </div>
-
-      <!-- Tab de ayuda -->
-      <div class="tab-pane fade" id="help-content" role="tabpanel" aria-labelledby="help-tab">
-        <h5 class="mb-3"><i class="fas fa-question-circle"></i> Ayuda</h5>
-        
-        <div class="accordion" id="helpAccordion">
-          <div class="accordion-item">
-            <h2 class="accordion-header" id="headingOne">
-              <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="true" aria-controls="collapseOne">
-                ¿Cómo conectarme con otro jugador?
-              </button>
-            </h2>
-            <div id="collapseOne" class="accordion-collapse collapse show" aria-labelledby="headingOne" data-bs-parent="#helpAccordion">
-              <div class="accordion-body">
-                <ol>
-                  <li>Conéctate al servidor proporcionando un nombre de usuario y un ID de sala.</li>
-                  <li>Comparte el ID de sala con otro jugador para que pueda unirse.</li>
-                  <li>En la pestaña "Jugadores", verás a los jugadores conectados a la sala.</li>
-                  <li>Haz clic en el botón "Conectar" junto al nombre del jugador para iniciar una conexión P2P.</li>
-                  <li>Una vez establecida la conexión, verás "Conectado" junto a su nombre.</li>
-                </ol>
+                <div class="d-grid gap-2">
+                  <button id="connect-btn" class="btn btn-primary">Conectar al servidor</button>
+                </div>
+                
+                <div class="mt-3">
+                  <p>Estado: <span id="connection-status" class="status-disconnected">Desconectado</span></p>
+                </div>
+                
+                <div class="mt-3 text-center">
+                  <a href="#" id="troubleshooting-link" class="text-info">¿Problemas para conectarte? Haz clic aquí</a>
+                </div>
               </div>
-            </div>
-          </div>
-          
-          <div class="accordion-item">
-            <h2 class="accordion-header" id="headingTwo">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTwo" aria-expanded="false" aria-controls="collapseTwo">
-                Problemas de conexión comunes
-              </button>
-            </h2>
-            <div id="collapseTwo" class="accordion-collapse collapse" aria-labelledby="headingTwo" data-bs-parent="#helpAccordion">
-              <div class="accordion-body">
-                <ul>
-                  <li><strong>No puedo conectarme al servidor</strong>: Verifica que la dirección del servidor sea correcta y que tengas conexión a internet.</li>
-                  <li><strong>La conexión P2P falla</strong>: Ambos jugadores deben estar detrás de un NAT que permita WebRTC. Si la conexión falla, intenta usar una VPN o conectarte a través de una red diferente.</li>
-                  <li><strong>La conexión se establece pero luego se cae</strong>: Si la conexión P2P se establece pero luego se pierde, intenta reconectar. Si el problema persiste, ambos jugadores deben reiniciar la aplicación.</li>
-                  <li><strong>La conexión es inestable</strong>: Esto puede deberse a problemas de red. Intenta cerrar otras aplicaciones que consuman ancho de banda.</li>
-                </ul>
-                <p><a href="#" id="troubleshooting-link">Ver guía completa de solución de problemas</a></p>
+              
+              <!-- Pestaña de Lobby -->
+              <div class="tab-pane fade" id="lobby" role="tabpanel" aria-labelledby="lobby-tab">
+                <h5 class="card-title">Lobby</h5>
+                
+                <div class="alert alert-info" role="alert">
+                  <strong>Paso 2:</strong> Tienes dos opciones para jugar:
+                  <ul class="mb-0">
+                    <li>Crear tu propia partida para que otros jugadores se unan</li>
+                    <li>Unirte a una partida existente creada por otro jugador</li>
+                  </ul>
+                </div>
+                
+                <div class="mb-3">
+                  <div class="d-flex justify-content-between align-items-center">
+                    <h6>Jugadores conectados</h6>
+                    <button id="refresh-players" class="btn btn-sm btn-primary">Actualizar</button>
+                  </div>
+                  <div class="help-text">Aquí puedes ver todos los jugadores en línea y conectarte directamente con ellos mediante P2P</div>
+                  <div id="players-list" class="mt-2">
+                    <p class="text-muted">No hay jugadores conectados</p>
+                  </div>
+                </div>
+
+                <div class="mb-3">
+                  <div class="d-flex justify-content-between align-items-center">
+                    <h6>Partidas disponibles</h6>
+                    <button id="create-game" class="btn btn-sm btn-primary">Crear partida</button>
+                  </div>
+                  <div class="help-text">Aquí puedes crear tu propia partida o unirte a una partida creada por otro jugador</div>
+                  <div id="games-list" class="mt-2">
+                    <p class="text-muted">No hay partidas disponibles</p>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-          
-          <div class="accordion-item">
-            <h2 class="accordion-header" id="headingThree">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseThree">
-                ¿Cómo jugar a Warcraft III?
-              </button>
-            </h2>
-            <div id="collapseThree" class="accordion-collapse collapse" aria-labelledby="headingThree" data-bs-parent="#helpAccordion">
-              <div class="accordion-body">
-                <ol>
-                  <li>Asegúrate de tener una conexión P2P establecida con al menos un jugador.</li>
-                  <li>En la pestaña "Juego", ingresa la ruta completa al ejecutable de Warcraft III.</li>
-                  <li>Haz clic en "Iniciar Warcraft III" para lanzar el juego.</li>
-                  <li>En Warcraft III, ve a "Multijugador" → "Local (LAN)" para ver a los demás jugadores.</li>
-                  <li>Uno de los jugadores debe crear una partida, y los demás unirse a ella.</li>
-                </ol>
-                <p><strong>Importante:</strong> Para que esta aplicación funcione correctamente, todos los jugadores deben tener Warcraft III instalado con la misma versión.</p>
+              
+              <!-- Pestaña de Juego -->
+              <div class="tab-pane fade" id="game" role="tabpanel" aria-labelledby="game-tab">
+                <h5 class="card-title">Partida en curso</h5>
+                
+                <div class="alert alert-info" role="alert">
+                  <strong>Paso 3:</strong> Una vez conectado con otro jugador, puedes chatear y lanzar Warcraft III.
+                </div>
+                
+                <div class="mb-3">
+                  <h6>Jugadores en partida</h6>
+                  <div id="game-players-list">
+                    <p class="text-muted">No hay jugadores en la partida</p>
+                  </div>
+                </div>
+
+                <div class="mb-3">
+                  <h6>Chat</h6>
+                  <div class="mb-2 p-2 border border-primary rounded bg-dark">
+                    <small class="text-info">⚠️ ¡IMPORTANTE! Utiliza este chat para comunicarte con otros jugadores y coordinar la partida</small>
+                  </div>
+                  <div id="chat-box" class="mb-2"></div>
+                  <div class="input-group">
+                    <input type="text" class="form-control" id="chat-input" placeholder="Escribe un mensaje...">
+                    <button class="btn btn-primary" id="send-chat">Enviar</button>
+                  </div>
+                </div>
+
+                <div class="d-grid gap-2">
+                  <button id="launch-game" class="btn btn-primary pulse-button" disabled>Iniciar Warcraft III</button>
+                  <div class="help-text">Este botón se habilitará cuando estés conectado con al menos otro jugador</div>
+                  <button id="leave-game" class="btn btn-danger">Abandonar partida</button>
+                </div>
               </div>
             </div>
           </div>
@@ -316,59 +254,8 @@
     </div>
   </div>
 
-  <script src="../node_modules/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="../node_modules/socket.io-client/dist/socket.io.js"></script>
-  <script src="renderer.js"></script>
-  
-  <script>
-    // Función para actualizar el estado de conexión de red
-    function updateNetworkStatus() {
-      const indicator = document.querySelector('.network-status');
-      const statusText = document.getElementById('network-status-text');
-      
-      if (navigator.onLine) {
-        indicator.classList.remove('offline');
-        indicator.classList.add('online');
-        statusText.textContent = 'Conectado';
-      } else {
-        indicator.classList.remove('online');
-        indicator.classList.add('offline');
-        statusText.textContent = 'Desconectado';
-      }
-    }
-    
-    // Función para actualizar el banner de conexión
-    function updateConnectionBanner(status, message) {
-      const banner = document.getElementById('connection-banner');
-      const statusMessage = document.getElementById('connection-status-message');
-      
-      // Eliminar clases previas
-      banner.classList.remove('connected', 'reconnecting', 'disconnected');
-      
-      // Actualizar clase y mensaje
-      banner.classList.add(status);
-      statusMessage.textContent = message;
-      
-      // Mostrar el banner
-      banner.style.display = 'flex';
-      
-      // Actualizar el estado de red
-      updateNetworkStatus();
-    }
-    
-    // Inicializar estado de red
-    window.addEventListener('load', updateNetworkStatus);
-    window.addEventListener('online', updateNetworkStatus);
-    window.addEventListener('offline', updateNetworkStatus);
-    
-    // Event listener para el enlace de solución de problemas
-    document.getElementById('troubleshooting-link').addEventListener('click', (e) => {
-      e.preventDefault();
-      window.api.send('open-troubleshooting');
-    });
-    
-    // Exponer la función updateConnectionBanner globalmente
-    window.updateConnectionBanner = updateConnectionBanner;
-  </script>
+  <!-- Scripts -->
+  <script src="./node_modules/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="./renderer.js"></script>
 </body>
 </html> 
