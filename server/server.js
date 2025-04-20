@@ -13,14 +13,14 @@ const server = http.createServer(app);
 // Configurar Socket.IO con CORS habilitado
 const io = socketIo(server, {
   cors: {
-    origin: '*', // En producciÛn, limitar a dominios especÌficos
+    origin: '*', // En producci√≥n, limitar a dominios espec√≠ficos
     methods: ['GET', 'POST']
   },
   pingTimeout: 10000,
   pingInterval: 5000
 });
 
-// Almacenar informaciÛn de los clientes y salas
+// Almacenar informaci√≥n de los clientes y salas
 const connectedClients = new Map();
 const gameRooms = new Map();
 
@@ -48,7 +48,7 @@ const handleGameRoom = (socket, userData) => {
   }
 
   if (room.players.size >= room.maxPlayers) {
-    socket.emit('room-error', { message: 'La sala est· llena' });
+    socket.emit('room-error', { message: 'La sala est√° llena' });
     return null;
   }
 
@@ -78,41 +78,156 @@ io.on('connection', (socket) => {
   socket.on('register', (userData) => {
     try {
       if (!validateUserData(userData)) {
-        socket.emit('register-error', { message: 'Datos de usuario inv·lidos' });
+        socket.emit('register-error', { message: 'Datos de usuario inv√°lidos' });
         return;
       }
 
       console.log(`Cliente registrado: ${userData.username}`);
       
-      // Crear o unirse a sala de juego
-      const roomId = handleGameRoom(socket, userData);
-      if (!roomId) return;
-
-      // Guardar informaciÛn del cliente
+      // No asignar autom√°ticamente a una sala, solo registrar al usuario
       connectedClients.set(socket.id, {
         id: socket.id,
         username: userData.username,
-        gameId: roomId,
         lastPong: Date.now()
       });
       
-      // Notificar actualizaciones
-      const roomInfo = gameRooms.get(roomId);
-      io.to(roomId).emit('room-updated', {
-        roomId,
-        players: Array.from(roomInfo.players).map(id => connectedClients.get(id))
-      });
+      // Notificar a todos los clientes sobre la lista actualizada
       io.emit('clients-updated', Array.from(connectedClients.values()));
+      
+      // Enviar lista de partidas disponibles
+      socket.emit('games-list', getPublicGames());
     } catch (error) {
       console.error('Error en registro:', error);
       socket.emit('register-error', { message: 'Error interno del servidor' });
     }
   });
   
-  // Manejar solicitud de conexiÛn P2P
+  // Obtener lista de clientes conectados
+  socket.on('get-clients', () => {
+    socket.emit('clients-updated', Array.from(connectedClients.values()));
+  });
+  
+  // Obtener lista de partidas disponibles
+  socket.on('get-games', () => {
+    // Enviar lista de partidas disponibles al cliente que lo solicit√≥
+    socket.emit('games-list', getPublicGames());
+  });
+  
+  // Crear una nueva partida
+  socket.on('create-game', () => {
+    try {
+      const clientInfo = connectedClients.get(socket.id);
+      if (!clientInfo) {
+        socket.emit('room-error', { message: 'Usuario no registrado' });
+        return;
+      }
+      
+      // Crear una nueva sala
+      const roomId = `game_${Date.now()}`;
+      const room = {
+        id: roomId,
+        players: new Set([socket.id]),
+        maxPlayers: 2,
+        status: 'waiting'
+      };
+      
+      gameRooms.set(roomId, room);
+      
+      // Actualizar informaci√≥n del cliente
+      clientInfo.gameId = roomId;
+      
+      // Notificar al cliente sobre la sala
+      io.to(socket.id).emit('room-updated', {
+        id: roomId,
+        players: Array.from(room.players).map(id => connectedClients.get(id))
+      });
+      
+      // Notificar a todos sobre la nueva lista de partidas
+      io.emit('games-list', getPublicGames());
+      
+      console.log(`Partida creada: ${roomId} por ${clientInfo.username}`);
+    } catch (error) {
+      console.error('Error al crear partida:', error);
+      socket.emit('room-error', { message: 'Error al crear partida' });
+    }
+  });
+  
+  // Unirse a una partida existente
+  socket.on('join-game', (data) => {
+    try {
+      const { gameId } = data;
+      const clientInfo = connectedClients.get(socket.id);
+      
+      if (!clientInfo) {
+        socket.emit('room-error', { message: 'Usuario no registrado' });
+        return;
+      }
+      
+      const room = gameRooms.get(gameId);
+      if (!room) {
+        socket.emit('room-error', { message: 'Partida no encontrada' });
+        return;
+      }
+      
+      if (room.players.size >= room.maxPlayers) {
+        socket.emit('room-error', { message: 'La partida est√° llena' });
+        return;
+      }
+      
+      // Unirse a la sala
+      room.players.add(socket.id);
+      socket.join(gameId);
+      
+      // Actualizar informaci√≥n del cliente
+      clientInfo.gameId = gameId;
+      
+      // Notificar a todos los jugadores en la sala
+      io.to(gameId).emit('room-updated', {
+        id: gameId,
+        players: Array.from(room.players).map(id => connectedClients.get(id))
+      });
+      
+      // Actualizar lista de partidas disponibles
+      io.emit('games-list', getPublicGames());
+      
+      console.log(`${clientInfo.username} se uni√≥ a la partida: ${gameId}`);
+    } catch (error) {
+      console.error('Error al unirse a partida:', error);
+      socket.emit('room-error', { message: 'Error al unirse a la partida' });
+    }
+  });
+  
+  // Manejar mensajes de chat en una sala
+  socket.on('chat-message', (data) => {
+    const { roomId, message } = data;
+    const clientInfo = connectedClients.get(socket.id);
+    
+    if (!clientInfo) return;
+    
+    // Enviar mensaje a todos los jugadores en la sala
+    io.to(roomId).emit('chat-message', {
+      username: clientInfo.username,
+      message
+    });
+  });
+  
+  // Notificar inicio de juego
+  socket.on('game-started', (data) => {
+    const { roomId } = data;
+    const clientInfo = connectedClients.get(socket.id);
+    
+    if (!clientInfo) return;
+    
+    // Notificar a todos los jugadores en la sala
+    io.to(roomId).emit('game-launched', {
+      username: clientInfo.username
+    });
+  });
+  
+  // Manejar solicitud de conexi√≥n P2P
   socket.on('connection-request', (data) => {
     const { targetId, offer } = data;
-    console.log(`Solicitud de conexiÛn de ${socket.id} a ${targetId}`);
+    console.log(`Solicitud de conexi√≥n de ${socket.id} a ${targetId}`);
     
     // Reenviar la oferta al cliente objetivo
     io.to(targetId).emit('connection-offer', {
@@ -122,12 +237,12 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Manejar respuesta a la oferta de conexiÛn
+  // Manejar respuesta a la oferta de conexi√≥n
   socket.on('connection-answer', (data) => {
     const { targetId, answer } = data;
-    console.log(`Respuesta de conexiÛn de ${socket.id} a ${targetId}`);
+    console.log(`Respuesta de conexi√≥n de ${socket.id} a ${targetId}`);
     
-    // Reenviar la respuesta al cliente que iniciÛ la oferta
+    // Reenviar la respuesta al cliente que inici√≥ la oferta
     io.to(targetId).emit('connection-response', {
       from: socket.id,
       answer
@@ -145,7 +260,44 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Manejar desconexiÛn
+  // Manejar salida de partida
+  socket.on('leave-game', (data) => {
+    try {
+      const { roomId } = data;
+      const clientInfo = connectedClients.get(socket.id);
+      
+      if (!clientInfo) return;
+      
+      const room = gameRooms.get(roomId);
+      if (!room) return;
+      
+      // Eliminar jugador de la sala
+      room.players.delete(socket.id);
+      
+      // Actualizar informaci√≥n del cliente
+      delete clientInfo.gameId;
+      
+      // Eliminar sala si est√° vac√≠a
+      if (room.players.size === 0) {
+        gameRooms.delete(roomId);
+      } else {
+        // Notificar a los jugadores restantes
+        io.to(roomId).emit('room-updated', {
+          id: roomId,
+          players: Array.from(room.players).map(id => connectedClients.get(id))
+        });
+      }
+      
+      // Actualizar lista de partidas
+      io.emit('games-list', getPublicGames());
+      
+      console.log(`${clientInfo.username} abandon√≥ la partida: ${roomId}`);
+    } catch (error) {
+      console.error('Error al abandonar partida:', error);
+    }
+  });
+  
+  // Manejar desconexi√≥n
   socket.on('disconnect', () => {
     try {
       console.log(`Cliente desconectado: ${socket.id}`);
@@ -153,14 +305,14 @@ io.on('connection', (socket) => {
       // Limpiar heartbeat
       clearInterval(heartbeat);
 
-      // Obtener informaciÛn del cliente
+      // Obtener informaci√≥n del cliente
       const clientInfo = connectedClients.get(socket.id);
       if (clientInfo && clientInfo.gameId) {
         const room = gameRooms.get(clientInfo.gameId);
         if (room) {
           room.players.delete(socket.id);
           
-          // Eliminar sala si est· vacÌa
+          // Eliminar sala si est√° vac√≠a
           if (room.players.size === 0) {
             gameRooms.delete(clientInfo.gameId);
           } else {
@@ -179,15 +331,15 @@ io.on('connection', (socket) => {
       // Notificar a todos los clientes sobre la lista actualizada
       io.emit('clients-updated', Array.from(connectedClients.values()));
     } catch (error) {
-      console.error('Error en desconexiÛn:', error);
+      console.error('Error en desconexi√≥n:', error);
     }
   });
 
-  // Manejar reconexiÛn
+  // Manejar reconexi√≥n
   socket.on('reconnect-attempt', (userData) => {
     try {
       if (!validateUserData(userData)) {
-        socket.emit('reconnect-error', { message: 'Datos de usuario inv·lidos' });
+        socket.emit('reconnect-error', { message: 'Datos de usuario inv√°lidos' });
         return;
       }
 
@@ -199,21 +351,43 @@ io.on('connection', (socket) => {
         handleGameRoom(socket, { ...userData, gameId: existingRoom.id });
       }
     } catch (error) {
-      console.error('Error en reconexiÛn:', error);
+      console.error('Error en reconexi√≥n:', error);
       socket.emit('reconnect-error', { message: 'Error interno del servidor' });
     }
   });
 });
 
-// Ruta b·sica para verificar que el servidor est· funcionando
+// Ruta b√°sica para verificar que el servidor est√° funcionando
 app.get('/', (req, res) => {
-  res.send('Servidor de seÒalizaciÛn para Warcraft P2P funcionando correctamente');
+  res.send('Servidor de se√±alizaci√≥n para Warcraft P2P funcionando correctamente');
 });
+
+// Funci√≥n para obtener partidas p√∫blicas disponibles
+function getPublicGames() {
+  const games = [];
+  
+  for (const [id, room] of gameRooms.entries()) {
+    // Solo incluir partidas que a√∫n tengan espacio
+    if (room.players.size < room.maxPlayers) {
+      games.push({
+        id,
+        players: Array.from(room.players).map(playerId => {
+          const player = connectedClients.get(playerId);
+          return player ? { id: playerId, username: player.username } : null;
+        }).filter(Boolean),
+        maxPlayers: room.maxPlayers,
+        status: room.status
+      });
+    }
+  }
+  
+  return games;
+}
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;
 
 // Iniciar servidor
 server.listen(PORT, () => {
-  console.log(`Servidor de seÒalizaciÛn ejecut·ndose en el puerto ${PORT}`);
+  console.log(`Servidor de se√±alizaci√≥n ejecut√°ndose en el puerto ${PORT}`);
 });
