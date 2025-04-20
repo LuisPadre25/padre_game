@@ -34,6 +34,37 @@ let currentRoom = null;
 let p2pConnections = {};
 let connectionAttempts = {}; // Rastrear intentos de conexión para evitar duplicados
 let isConnecting = false; // Bloquear múltiples intentos simultáneos
+let previousConnectionInfo = null; // Almacenar información para reconexión
+let reconnectionAttempts = 0; // Contador de intentos de reconexión
+const MAX_RECONNECTION_ATTEMPTS = 5; // Máximo de intentos de reconexión
+let localStream;
+let peerConnections = {}; // Almacena todas las conexiones peer
+let dataChannels = {}; // Almacena todos los canales de datos
+let myId = null;
+let username = ''; 
+let roomId = '';
+let serverAddress = '';
+let reconnectionTimer = null;
+let maxReconnectionAttempts = 10;
+let reconnectionDelay = 1000; // Tiempo inicial de reintento en ms
+let isReconnecting = false;
+let networkStatusCheckInterval = null;
+let activePeers = new Set(); // Almacena los IDs de los peers activos
+let socketReconnecting = false;
+let lastConnectionState = {};
+let lastPeers = [];
+let networkOnline = navigator.onLine;
+let hasActiveP2PConnections = false;
+let localSocketId;
+let warcraftPath = '';
+let reconnectAttempt = 0;
+let maxReconnectAttempts = 10;
+let reconnectInterval = 1000; // Comienza con 1 segundo
+let reconnectTimeoutId = null;
+let knownPeers = new Set(); // Guarda los IDs de los peers con los que ya teníamos conexión
+let lastNetworkState = navigator.onLine;
+let heartbeatInterval = null;
+let lastReceivedHeartbeat = Date.now();
 
 // Cargar configuración guardada
 document.addEventListener('DOMContentLoaded', () => {
@@ -94,332 +125,253 @@ connectBtn.addEventListener('click', () => {
     localStorage.setItem('serverUrl', serverUrl);
     
     // Conectar al servidor
-    connectToServer(username, serverUrl);
+    connectToServer();
 });
 
 // Función para conectar al servidor
-function connectToServer(username, serverUrl) {
+function connectToServer() {
+    // Obtener valores del formulario
+    const serverAddress = document.getElementById('server-address').value.trim();
+    username = document.getElementById('username').value.trim();
+    roomId = document.getElementById('room-id').value.trim();
+
+    // Validación básica
+    if (!serverAddress || !username || !roomId) {
+        addChatMessage('Por favor, completa todos los campos.', 'error');
+        return;
+    }
+
+    // Actualizar banner de conexión
+    updateConnectionBanner('reconnecting', 'Conectando al servidor...');
+
+    // Deshabilitar el botón de conexión para evitar múltiples intentos
+    document.getElementById('connect-button').disabled = true;
+
     try {
-        // Desconectar si ya hay una conexión
-        if (socket) {
-            socket.disconnect();
-        }
-        
-        // Conectar al servidor
-        connectionStatus.textContent = 'Conectando...';
-        connectionStatus.className = 'status-disconnected';
-        
-        // Mostrar información de conexión
-        console.log(`Intentando conectar a: ${serverUrl}`);
-        addChatMessage('Sistema', `Intentando conectar a: ${serverUrl}`);
-        
-        // Cargar la biblioteca de Socket.IO desde node_modules
-        const io = require('./node_modules/socket.io-client/dist/socket.io.js');
-        
-        // Configurar opciones de conexión con timeout más largo para conexiones remotas
-        const socketOptions = {
-            reconnectionAttempts: 5,
-            timeout: 10000,
-            reconnectionDelay: 2000
-        };
-        
-        // Conectar al servidor
-        socket = io(serverUrl, socketOptions);
-        
-        // Configurar eventos de Socket.IO
-        setupSocketEvents(username);
-        
+        // Inicializar la conexión de Socket.io
+        socket = io(serverAddress, {
+            query: { username, roomId },
+            reconnectionAttempts: maxReconnectAttempts,
+            reconnectionDelay: reconnectInterval,
+            reconnectionDelayMax: 10000,
+            timeout: 10000
+        });
+
+        // Evento al conectar
+        socket.on('connect', () => {
+            console.log('Conectado al servidor:', serverAddress);
+            reconnectAttempt = 0;
+            reconnectInterval = 1000;
+            isReconnecting = false;
+            localSocketId = socket.id;
+            
+            // Actualizar UI
+            document.getElementById('connection-form').style.display = 'none';
+            document.getElementById('game-info').style.display = 'block';
+            document.getElementById('room-id-display').textContent = roomId;
+            document.getElementById('username-display').textContent = username;
+            
+            // Configurar los eventos del socket
+            setupSocketEvents();
+            
+            // Iniciar heartbeat
+            startHeartbeat();
+            
+            // Actualizar banner de conexión
+            updateConnectionBanner('connected', 'Conectado al servidor exitosamente');
+            
+            // Si teníamos peers conocidos, intentar reconectar
+            if (knownPeers.size > 0) {
+                setTimeout(() => {
+                    reconnectPeers();
+                }, 1000);
+            }
+        });
+
+        // Evento al desconectar
+        socket.on('disconnect', (reason) => {
+            console.log('Desconectado del servidor:', reason);
+            
+            // Actualizar banner de conexión
+            updateConnectionBanner('disconnected', 'Desconectado del servidor. Intentando reconectar...');
+            
+            // Detener heartbeat
+            clearInterval(heartbeatInterval);
+            
+            // Si no estamos reconectando manualmente, programar reconexión
+            if (!isReconnecting && reason !== 'io client disconnect') {
+                scheduleReconnection();
+            }
+        });
+
+        // Evento al error de conexión
+        socket.on('connect_error', (error) => {
+            console.error('Error de conexión:', error);
+            document.getElementById('connect-button').disabled = false;
+            
+            // Actualizar banner de conexión
+            updateConnectionBanner('disconnected', `Error de conexión: ${error.message}`);
+            
+            // Programar reconexión
+            scheduleReconnection();
+        });
+
     } catch (error) {
-        console.error('Error al conectar:', error);
-        connectionStatus.textContent = 'Error: ' + error.message;
-        connectionStatus.className = 'status-disconnected';
-        addChatMessage('Sistema', `Error al conectar: ${error.message}`);
+        console.error('Error al inicializar Socket.io:', error);
+        document.getElementById('connect-button').disabled = false;
+        addChatMessage(`Error al conectar: ${error.message}`, 'error');
+        
+        // Actualizar banner de conexión
+        updateConnectionBanner('disconnected', `Error al conectar: ${error.message}`);
     }
 }
 
-// Configurar eventos de Socket.IO
-function setupSocketEvents(username) {
-    // Evento connect
-    socket.on('connect', () => {
-        connectionStatus.textContent = 'Conectado';
-        connectionStatus.className = 'status-connected';
-        
-        // Registrar usuario
-        socket.emit('register', { username });
-        
-        // Guardar usuario actual
-        currentUser = {
-            id: socket.id,
-            username
-        };
-        
-        // Cambiar a la pestaña de lobby
-        lobbyTabEl.show();
-        
-        // Actualizar lista de jugadores y partidas
-        refreshPlayers();
-        refreshGames();
-    });
+// Función para programar reconexión con backoff exponencial
+function scheduleReconnection() {
+    // Limpiar cualquier timeout existente
+    if (reconnectTimeoutId) {
+        clearTimeout(reconnectTimeoutId);
+        reconnectTimeoutId = null;
+    }
     
-    // Evento disconnect
-    socket.on('disconnect', () => {
-        connectionStatus.textContent = 'Desconectado';
-        connectionStatus.className = 'status-disconnected';
+    // Si ya alcanzamos el máximo de intentos, detener
+    if (reconnectAttempt >= maxReconnectAttempts) {
+        console.log('Máximo de intentos de reconexión alcanzados.');
+        addChatMessage('No se pudo reconectar al servidor después de múltiples intentos. Por favor, recarga la página.', 'error');
+        document.getElementById('connect-button').disabled = false;
+        return;
+    }
+    
+    // Calcular tiempo de espera con backoff exponencial
+    const delay = Math.min(reconnectInterval * Math.pow(2, reconnectAttempt), 30000);
+    console.log(`Intentando reconectar en ${delay}ms (intento ${reconnectAttempt + 1}/${maxReconnectAttempts})`);
+    
+    // Actualizar banner de conexión
+    updateConnectionBanner('reconnecting', `Reconectando en ${Math.round(delay/1000)} segundos... (intento ${reconnectAttempt + 1}/${maxReconnectAttempts})`);
+    
+    // Programar reconexión
+    isReconnecting = true;
+    reconnectTimeoutId = setTimeout(() => {
+        reconnectAttempt++;
         
-        // Limpiar estado
-        currentUser = null;
-        currentRoom = null;
+        // Si hay una conexión socket existente, intentar cerrarla primero
+        if (socket && socket.connected) {
+            socket.close();
+        }
+        
+        // Reintentar conexión
+        try {
+            connectToServer();
+        } catch (error) {
+            console.error('Error al reconectar:', error);
+            // Si falla, continuar con el backoff
+            scheduleReconnection();
+        }
+    }, delay);
+}
+
+// Detectar cambios en la conexión de red
+window.addEventListener('online', () => {
+    console.log('Red conectada');
+    lastNetworkState = true;
+    addChatMessage('La conexión de red ha sido restablecida. Reconectando...', 'info');
+    
+    // Intentar reconectar inmediatamente si estábamos desconectados
+    if (socket && !socket.connected) {
+        reconnectAttempt = 0; // Reiniciar contador de intentos
+        scheduleReconnection();
+    }
+});
+
+window.addEventListener('offline', () => {
+    console.log('Red desconectada');
+    lastNetworkState = false;
+    addChatMessage('La conexión de red se ha perdido. Esperando reconexión...', 'warning');
+    updateConnectionBanner('disconnected', 'Sin conexión a Internet');
+});
+
+// Configurar eventos del socket
+function setupSocketEvents() {
+    // Evento al unirse a la sala
+    socket.on('user-joined', (data) => {
+        console.log('Usuario unido:', data);
+        addChatMessage(`${data.username} se ha unido a la sala.`, 'info');
+        renderPlayersList(data.users);
+    });
+
+    // Evento al salir de la sala
+    socket.on('user-left', (data) => {
+        console.log('Usuario salió:', data);
+        addChatMessage(`${data.username} ha salido de la sala.`, 'info');
+        
+        // Eliminar conexiones con ese usuario
+        if (peerConnections[data.socketId]) {
+            peerConnections[data.socketId].close();
+            delete peerConnections[data.socketId];
+        }
+        
+        if (dataChannels[data.socketId]) {
+            delete dataChannels[data.socketId];
+        }
+        
+        knownPeers.delete(data.socketId);
+        
+        renderPlayersList(data.users);
         updateLaunchButton();
-        
-        // Cambiar a la pestaña de configuración
-        setupTabEl.show();
     });
+
+    // Eventos para la señalización WebRTC
+    socket.on('webrtc-offer', handleWebRTCOffer);
+    socket.on('webrtc-answer', handleWebRTCAnswer);
+    socket.on('webrtc-ice-candidate', handleICECandidate);
     
-    // Evento ping para mantener la conexión viva
-    socket.on('ping', () => {
-        socket.emit('pong');
-    });
-    
-    // Evento de actualización de clientes
-    socket.on('clients-updated', (clients) => {
-        // Actualizar lista de jugadores conectados
-        renderPlayersList(clients);
-    });
-    
-    // Evento de actualización de lista de partidas
-    socket.on('games-list', (games) => {
-        console.log('Lista de partidas recibida:', games);
-        renderGamesList(games);
-    });
-    
-    // Evento de actualización de sala
-    socket.on('room-updated', (roomData) => {
-        console.log('Datos de sala recibidos:', roomData);
-        
-        // Verificar formato de datos recibidos
-        if (!roomData) return;
-        
-        // Compatibilidad con diferentes formatos
-        currentRoom = {
-            id: roomData.id || roomData.roomId,
-            players: roomData.players || []
-        };
-        
-        console.log('Sala actualizada:', currentRoom);
-        
-        // Renderizar jugadores en la sala
-        renderGamePlayersList(currentRoom.players);
-        
-        // Habilitar el chat y el botón de lanzar juego inmediatamente
-        chatInput.disabled = false;
-        sendChatBtn.disabled = false;
-        updateLaunchButton();
-        
-        // Cambiar a la pestaña de juego
-        gameTabEl.show();
-        
-        // Notificar sobre la partida
-        addChatMessage('Sistema', 'Estás en una partida. Puedes chatear y lanzar Warcraft III.');
-        
-        // Actualizar la lista de partidas
-        refreshGames();
-    });
-    
-    // Evento de error en el registro
-    socket.on('register-error', (error) => {
-        alert('Error al registrar: ' + error.message);
-    });
-    
-    // Evento de error en la sala
-    socket.on('room-error', (error) => {
-        alert('Error en la sala: ' + error.message);
-    });
-    
-    // Eventos para P2P WebRTC
-    socket.on('connection-offer', async (data) => {
-        const { from, fromUsername, offer } = data;
-        console.log(`Oferta de conexión recibida de ${fromUsername}`);
-        
-        // Evitar procesar ofertas duplicadas en un corto periodo de tiempo
-        if (connectionAttempts[from] && (Date.now() - connectionAttempts[from]) < 2000) {
-            console.log('Ignorando oferta duplicada');
-            return;
-        }
-        
-        connectionAttempts[from] = Date.now();
-        addChatMessage('Sistema', `${fromUsername} quiere conectarse contigo`);
-        
-        // Crear respuesta a la oferta
-        try {
-            // Cerrar conexión previa si existe
-            if (p2pConnections[from]) {
-                try {
-                    p2pConnections[from].close();
-                    delete p2pConnections[from];
-                } catch (err) {
-                    console.log('Error al cerrar conexión anterior:', err);
-                }
-            }
-            
-            // Crear conexión P2P para este peer
-            const peerConnection = createPeerConnection(from);
-            
-            // Establecer oferta remota
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-            
-            // Añadir candidatos ICE pendientes
-            if (peerConnection.pendingIceCandidates && peerConnection.pendingIceCandidates.length > 0) {
-                console.log(`Añadiendo ${peerConnection.pendingIceCandidates.length} candidatos ICE pendientes después de recibir oferta`);
-                for (const candidate of peerConnection.pendingIceCandidates) {
-                    await peerConnection.addIceCandidate(candidate);
-                }
-                peerConnection.pendingIceCandidates = [];
-            }
-            
-            // Crear respuesta con restricciones específicas
-            const answerOptions = {
-                offerToReceiveAudio: false,
-                offerToReceiveVideo: false
-            };
-            
-            const answer = await peerConnection.createAnswer(answerOptions);
-            await peerConnection.setLocalDescription(answer);
-            
-            // Esperar a que se recojan algunos candidatos ICE antes de enviar la respuesta
-            setTimeout(() => {
-                // Verificar si aún tenemos la conexión
-                if (p2pConnections[from]) {
-                    // Enviar respuesta al peer
-                    socket.emit('connection-answer', {
-                        targetId: from,
-                        answer: peerConnection.localDescription
-                    });
-                    
-                    addChatMessage('Sistema', `Respuesta enviada a ${fromUsername}`);
-                }
-            }, 1000);
-            
-        } catch (error) {
-            console.error('Error al procesar oferta:', error);
-            addChatMessage('Sistema', `Error al procesar oferta: ${error.message}`);
-        }
-    });
-    
-    socket.on('connection-response', async (data) => {
-        const { from, answer } = data;
-        console.log(`Respuesta de conexión recibida de ${from}`);
-        
-        // Establecer la respuesta como descripción remota
-        try {
-            const peerConnection = p2pConnections[from];
-            if (peerConnection) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-                
-                // Añadir candidatos ICE pendientes una vez establecida la descripción remota
-                if (peerConnection.pendingIceCandidates && peerConnection.pendingIceCandidates.length > 0) {
-                    console.log(`Añadiendo ${peerConnection.pendingIceCandidates.length} candidatos ICE pendientes`);
-                    for (const candidate of peerConnection.pendingIceCandidates) {
-                        await peerConnection.addIceCandidate(candidate);
-                    }
-                    peerConnection.pendingIceCandidates = [];
-                }
-            }
-        } catch (error) {
-            console.error('Error al procesar respuesta:', error);
-            addChatMessage('Sistema', `Error en conexión: ${error.message}`);
-        }
-    });
-    
-    socket.on('ice-candidate', async (data) => {
-        const { from, candidate } = data;
-        
-        try {
-            const peerConnection = p2pConnections[from];
-            if (peerConnection) {
-                const candidateObj = new RTCIceCandidate(candidate);
-                
-                // Si ya tenemos una descripción remota, añadimos el candidato
-                // Si no, lo guardamos para añadirlo después
-                if (peerConnection.currentRemoteDescription) {
-                    await peerConnection.addIceCandidate(candidateObj);
-                } else {
-                    if (!peerConnection.pendingIceCandidates) {
-                        peerConnection.pendingIceCandidates = [];
-                    }
-                    console.log('Guardando candidato ICE para añadirlo más tarde');
-                    peerConnection.pendingIceCandidates.push(candidateObj);
-                }
-            }
-        } catch (error) {
-            console.error('Error al agregar candidato ICE:', error);
-            addChatMessage('Sistema', `Error con candidato ICE: ${error.message}`);
-        }
-    });
-    
-    // Evento de mensaje de chat - mejoramos la identificación del remitente
+    // Evento para mensajes de chat
     socket.on('chat-message', (data) => {
-        // Verificar si ya existe una entrada igual en los últimos mensajes para evitar duplicados
-        const lastMessages = Array.from(chatBox.querySelectorAll('div')).slice(-5);
-        const isDuplicate = lastMessages.some(el => 
-            el.innerHTML === `<strong>${data.username}:</strong> ${data.message}`
-        );
-        
-        if (!isDuplicate) {
-            // Identificar si el mensaje es propio
-            const isOwnMessage = data.username === currentUser?.username;
-            
-            // Añadir el mensaje al chat con estilo diferente si es propio
-            addChatMessage(data.username, data.message, isOwnMessage);
-            
-            // Scroll al final para asegurar que siempre se vea el último mensaje
-            chatBox.scrollTop = chatBox.scrollHeight;
-        }
+        addChatMessage(`${data.sender}: ${data.message}`);
     });
     
-    // Evento cuando Warcraft es iniciado
-    window.ipcRenderer.on('warcraft-launched', (event, data) => {
-        // Mostrar instrucciones específicas basadas en si es host o no
-        const roleText = data.isHost ? 'ANFITRIÓN' : 'JUGADOR';
-        
-        addChatMessage('Sistema', `[${roleText}] ${data.instructions}`);
-        addChatMessage('Sistema', `Se ha abierto una ventana con instrucciones paso a paso.`);
-        
-        // Enviar instrucciones también a través del chat a otros jugadores
-        if (currentRoom && currentRoom.id) {
-            socket.emit('chat-message', {
-                roomId: currentRoom.id,
-                message: `[${roleText}] Nombre de partida LAN: ${data.gameName}`
-            });
-        }
-    });
-    
-    // Evento de notificación de inicio de juego
-    socket.on('game-launched', (data) => {
-        const isHost = data.isHost;
-        const gameName = data.gameName;
-        
-        if (isHost) {
-            addChatMessage('Sistema', `${data.username} ha iniciado Warcraft III como ANFITRIÓN`);
-            addChatMessage('Sistema', `Debes buscar la partida LAN con nombre: ${gameName}`);
-        } else {
-            addChatMessage('Sistema', `${data.username} ha iniciado Warcraft III y se unirá a tu partida`);
-        }
-    });
-    
-    // Eventos para errores y cierre de Warcraft
-    window.ipcRenderer.on('warcraft-error', (event, message) => {
-        alert('Error al iniciar Warcraft: ' + message);
-    });
-    
-    window.ipcRenderer.on('warcraft-closed', (event, code) => {
-        addChatMessage('Sistema', 'Warcraft ha sido cerrado. Código de salida: ' + code);
+    // Evento de heartbeat
+    socket.on('heartbeat', () => {
+        lastReceivedHeartbeat = Date.now();
+        socket.emit('heartbeat-response');
     });
 }
 
-// Crear conexión P2P
-function createPeerConnection(peerId) {
-    // Configuración de STUN/TURN servers mejorada
-    const peerConnection = new RTCPeerConnection({
+// Función para reconectar con peers conocidos
+function reconnectPeers() {
+    if (knownPeers.size === 0) return;
+    
+    addChatMessage('Intentando reconectar con jugadores conocidos...', 'info');
+    
+    knownPeers.forEach((peerId) => {
+        // Verificar si ya tenemos una conexión activa
+        if (peerConnections[peerId] && peerConnections[peerId].connectionState === 'connected') {
+            console.log(`Ya conectado con ${peerId}, omitiendo.`);
+            return;
+        }
+        
+        // Si la conexión existe pero está cerrada o fallida, eliminarla
+        if (peerConnections[peerId]) {
+            peerConnections[peerId].close();
+            delete peerConnections[peerId];
+        }
+        
+        // Crear nueva conexión
+        console.log(`Intentando reconectar con peer: ${peerId}`);
+        connectToPeer(peerId);
+    });
+}
+
+// Función para crear conexión P2P
+function createPeerConnection(socketId, isInitiator = false) {
+    // Si ya existe una conexión, cerrarla
+    if (peerConnections[socketId]) {
+        peerConnections[socketId].close();
+    }
+    
+    console.log(`Creando conexión P2P con ${socketId}, iniciador: ${isInitiator}`);
+    
+    const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
@@ -427,590 +379,548 @@ function createPeerConnection(peerId) {
             { urls: 'stun:stun3.l.google.com:19302' },
             { urls: 'stun:stun4.l.google.com:19302' }
         ],
-        iceTransportPolicy: 'all',
         iceCandidatePoolSize: 10,
-        // Configuración extra para mejorar conexiones con NAT
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require'
-    });
-    
-    // Guardar la conexión en el mapa de conexiones
-    p2pConnections[peerId] = peerConnection;
-    
-    // Manejar cambios de estado de conexión
-    peerConnection.onconnectionstatechange = () => {
-        console.log(`Estado de conexión con ${peerId}: ${peerConnection.connectionState}`);
-        addChatMessage('Sistema', `Estado de conexión: ${peerConnection.connectionState}`);
-        
-        // Marcar como no conectando cuando la conexión está establecida o ha fallado
-        if (peerConnection.connectionState === 'connected' || 
-            peerConnection.connectionState === 'failed' ||
-            peerConnection.connectionState === 'disconnected' ||
-            peerConnection.connectionState === 'closed') {
-            isConnecting = false;
-        }
-        
-        // Limpiar conexión fallida después de un tiempo
-        if (peerConnection.connectionState === 'failed' || 
-            peerConnection.connectionState === 'disconnected' ||
-            peerConnection.connectionState === 'closed') {
-            setTimeout(() => {
-                if (p2pConnections[peerId] === peerConnection) {
-                    delete p2pConnections[peerId];
-                    console.log(`Conexión eliminada para ${peerId}`);
-                }
-            }, 5000);
-        }
-        
-        // Actualizar la interfaz para reflejar el nuevo estado
-        refreshPlayers();
     };
     
-    // Manejar candidatos ICE
+    // Crear nueva conexión
+    const peerConnection = new RTCPeerConnection(configuration);
+    peerConnections[socketId] = peerConnection;
+    
+    // Guardar como peer conocido
+    knownPeers.add(socketId);
+    
+    // Configurar handlers para eventos ICE
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
-            // Enviar candidato al peer remoto
-            socket.emit('ice-candidate', {
-                targetId: peerId,
+            console.log('Enviando candidato ICE:', event.candidate);
+            socket.emit('webrtc-ice-candidate', {
+                target: socketId,
                 candidate: event.candidate
             });
         }
     };
     
-    peerConnection.onicecandidateerror = (event) => {
-        console.error('Error de candidato ICE:', event);
-    };
-    
     peerConnection.oniceconnectionstatechange = () => {
-        console.log(`Estado de conexión ICE: ${peerConnection.iceConnectionState}`);
+        console.log(`Estado de conexión ICE con ${socketId}:`, peerConnection.iceConnectionState);
+        
+        if (peerConnection.iceConnectionState === 'disconnected' || 
+            peerConnection.iceConnectionState === 'failed' || 
+            peerConnection.iceConnectionState === 'closed') {
+            
+            addChatMessage(`Conexión con jugador perdida. Estado: ${peerConnection.iceConnectionState}`, 'warning');
+            
+            // Si es una desconexión, intentar reconectar automáticamente
+            if (peerConnection.iceConnectionState === 'disconnected' && knownPeers.has(socketId)) {
+                setTimeout(() => {
+                    if (peerConnection.iceConnectionState === 'disconnected') {
+                        addChatMessage('Intentando restablecer conexión...', 'info');
+                        connectToPeer(socketId);
+                    }
+                }, 5000);
+            }
+        }
+        
+        // Actualizar la interfaz
+        renderPlayersList();
+        updateLaunchButton();
     };
     
-    // Manejar canal de datos
-    peerConnection.ondatachannel = (event) => {
-        const dataChannel = event.channel;
-        setupDataChannel(dataChannel, peerId);
+    peerConnection.onconnectionstatechange = () => {
+        console.log(`Estado de conexión con ${socketId}:`, peerConnection.connectionState);
+        
+        if (peerConnection.connectionState === 'connected') {
+            addChatMessage(`Conexión P2P establecida exitosamente.`, 'success');
+            isConnecting = false;
+            
+            // Mostrar pestaña de juego y actualizar botón
+            document.getElementById('game-tab').click();
+            updateLaunchButton();
+        } else if (peerConnection.connectionState === 'failed' || 
+                  peerConnection.connectionState === 'closed') {
+            isConnecting = false;
+            
+            // Actualizar UI
+            renderPlayersList();
+            updateLaunchButton();
+        }
     };
-
-    // Almacenar los candidatos ICE pendientes
-    if (!peerConnection.pendingIceCandidates) {
-        peerConnection.pendingIceCandidates = [];
+    
+    // Configurar canal de datos si somos el iniciador
+    if (isInitiator) {
+        setupDataChannel(peerConnection, socketId);
+    } else {
+        peerConnection.ondatachannel = (event) => {
+            console.log('Canal de datos recibido:', event.channel);
+            setupDataChannel(peerConnection, socketId, event.channel);
+        };
     }
     
     return peerConnection;
 }
 
-// Configurar canal de datos
-function setupDataChannel(dataChannel, peerId) {
-    // Almacenar el canal de datos en la conexión
-    if (p2pConnections[peerId]) {
-        p2pConnections[peerId].dataChannel = dataChannel;
+// Función para manejar ofertas WebRTC
+function handleWebRTCOffer(data) {
+    console.log('Oferta WebRTC recibida:', data);
+    
+    const peerConnection = createPeerConnection(data.from, false);
+    
+    peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
+        .then(() => peerConnection.createAnswer())
+        .then(answer => peerConnection.setLocalDescription(answer))
+        .then(() => {
+            console.log('Enviando respuesta WebRTC');
+            socket.emit('webrtc-answer', {
+                target: data.from,
+                answer: peerConnection.localDescription
+            });
+        })
+        .catch(error => {
+            console.error('Error al procesar oferta WebRTC:', error);
+            addChatMessage(`Error al establecer conexión P2P: ${error.message}`, 'error');
+        });
+}
+
+// Función para manejar respuestas WebRTC
+function handleWebRTCAnswer(data) {
+    console.log('Respuesta WebRTC recibida:', data);
+    
+    const peerConnection = peerConnections[data.from];
+    if (peerConnection) {
+        peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer))
+            .catch(error => {
+                console.error('Error al establecer descripción remota:', error);
+                addChatMessage(`Error al completar conexión P2P: ${error.message}`, 'error');
+            });
+    } else {
+        console.error('No se encontró la conexión para la respuesta recibida');
     }
+}
+
+// Función para manejar candidatos ICE
+function handleICECandidate(data) {
+    console.log('Candidato ICE recibido:', data);
+    
+    const peerConnection = peerConnections[data.from];
+    if (peerConnection) {
+        peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate))
+            .catch(error => {
+                console.error('Error al agregar candidato ICE:', error);
+            });
+    } else {
+        console.error('No se encontró la conexión para el candidato ICE recibido');
+    }
+}
+
+// Función para configurar el canal de datos
+function setupDataChannel(peerConnection, socketId, channel = null) {
+    // Si se proporciona un canal, usarlo; de lo contrario, crear uno nuevo
+    const dataChannel = channel || peerConnection.createDataChannel('data');
+    dataChannels[socketId] = dataChannel;
     
     dataChannel.onopen = () => {
-        console.log(`Canal de datos abierto con ${peerId}`);
-        addChatMessage('Sistema', `Conexión establecida con otro jugador`);
+        console.log(`Canal de datos con ${socketId} abierto`);
+        addChatMessage(`Canal de comunicación establecido correctamente.`, 'success');
         
-        // Cambiar automáticamente a la pestaña de juego
-        gameTabEl.show();
+        // Mostrar pestaña de juego automáticamente
+        document.getElementById('game-tab').click();
         
-        // Activar el botón de lanzar juego
+        // Actualizar el botón de inicio
         updateLaunchButton();
-        
-        // Notificar al usuario sobre los siguientes pasos
-        addChatMessage('Sistema', `Ya puedes chatear y lanzar Warcraft III. La conexión P2P está activa.`);
-        
-        // Habilitar el input de chat
-        chatInput.disabled = false;
-        sendChatBtn.disabled = false;
-        
-        // Enviar mensaje de prueba
-        sendChatMessage('¡Hola! La conexión está establecida.');
     };
     
     dataChannel.onclose = () => {
-        console.log(`Canal de datos cerrado con ${peerId}`);
-        addChatMessage('Sistema', `Conexión cerrada con otro jugador`);
-        
-        // Deshabilitar el input de chat
-        chatInput.disabled = true;
-        sendChatBtn.disabled = true;
-        
-        // Actualizar el botón de lanzar juego
-        updateLaunchButton();
-    };
-    
-    dataChannel.onerror = (error) => {
-        console.error(`Error en canal de datos: ${error}`);
-        addChatMessage('Sistema', `Error en la conexión: ${error}`);
+        console.log(`Canal de datos con ${socketId} cerrado`);
     };
     
     dataChannel.onmessage = (event) => {
         try {
-            const message = JSON.parse(event.data);
-            
-            // Manejar diferentes tipos de mensajes
-            switch (message.type) {
-                case 'chat':
-                    addChatMessage(message.username, message.text);
-                    break;
-                case 'game-command':
-                    // Procesar comandos de juego aquí
-                    console.log('Comando de juego recibido:', message);
-                    break;
-                case 'ping':
-                    // Responder al ping para mantener la conexión viva
-                    sendP2PMessage(peerId, { type: 'pong', timestamp: Date.now() });
-                    break;
-                default:
-                    console.log('Mensaje desconocido recibido:', message);
+            const data = JSON.parse(event.data);
+            if (data.type === 'chat') {
+                addChatMessage(`${data.username}: ${data.message}`);
+            } else if (data.type === 'system') {
+                addChatMessage(data.message, 'info');
             }
         } catch (error) {
             console.error('Error al procesar mensaje:', error);
+            addChatMessage(`Mensaje recibido: ${event.data}`);
         }
     };
 }
 
-// Función para enviar mensajes P2P
-function sendP2PMessage(peerId, message) {
-    try {
-        const connection = p2pConnections[peerId];
-        if (connection && connection.dataChannel && connection.dataChannel.readyState === 'open') {
-            connection.dataChannel.send(JSON.stringify(message));
-            return true;
-        }
-        return false;
-    } catch (error) {
-        console.error('Error al enviar mensaje P2P:', error);
-        return false;
-    }
-}
-
-// Iniciar una conexión P2P con otro jugador
-async function connectToPlayer(playerId) {
-    try {
-        // Evitar múltiples intentos simultáneos
-        if (isConnecting) {
-            addChatMessage('Sistema', `Ya hay una conexión en curso, espera un momento...`);
-            return;
-        }
-        
-        // Evitar conexiones duplicadas
-        if (p2pConnections[playerId] && 
-            (p2pConnections[playerId].connectionState === 'connected' || 
-             p2pConnections[playerId].connectionState === 'connecting')) {
-            addChatMessage('Sistema', `Ya existe una conexión con este jugador`);
-            return;
-        }
-        
-        // Evitar reconexiones demasiado frecuentes
-        if (connectionAttempts[playerId] && (Date.now() - connectionAttempts[playerId]) < 5000) {
-            addChatMessage('Sistema', `Espera unos segundos antes de intentar conectarte de nuevo`);
-            return;
-        }
-        
-        isConnecting = true;
-        connectionAttempts[playerId] = Date.now();
-        
-        addChatMessage('Sistema', `Intentando conectar con otro jugador...`);
-        
-        // Cerrar conexión previa si existe
-        if (p2pConnections[playerId]) {
-            try {
-                p2pConnections[playerId].close();
-                delete p2pConnections[playerId];
-            } catch (err) {
-                console.log('Error al cerrar conexión anterior:', err);
-            }
-        }
-        
-        // Crear conexión P2P
-        const peerConnection = createPeerConnection(playerId);
-        
-        // Crear canal de datos con configuración optimizada
-        const dataChannel = peerConnection.createDataChannel('game-data', {
-            ordered: true,
-            maxRetransmits: 3
-        });
-        setupDataChannel(dataChannel, playerId);
-        peerConnection.dataChannel = dataChannel;
-        
-        // Crear oferta con restricciones específicas para mejorar compatibilidad
-        const offerOptions = {
-            offerToReceiveAudio: false,
-            offerToReceiveVideo: false,
-            iceRestart: true // Añadido para mejorar reconexiones
-        };
-        
-        const offer = await peerConnection.createOffer(offerOptions);
-        await peerConnection.setLocalDescription(offer);
-        
-        // Esperar a que se generen los candidatos ICE antes de enviar la oferta
-        setTimeout(() => {
-            // Verificar si aún estamos intentando conectar con este peer
-            if (p2pConnections[playerId]) {
-                // Enviar oferta al jugador
-                socket.emit('connection-request', {
-                    targetId: playerId,
-                    offer: peerConnection.localDescription
-                });
-                
-                addChatMessage('Sistema', `Oferta enviada, esperando respuesta...`);
-                
-                // Establecer un timeout para la conexión
-                setTimeout(() => {
-                    if (p2pConnections[playerId] && p2pConnections[playerId].connectionState !== 'connected') {
-                        addChatMessage('Sistema', `La conexión está tardando demasiado. Intenta nuevamente.`);
-                        isConnecting = false;
-                    }
-                }, 15000);
-            } else {
-                addChatMessage('Sistema', `Conexión cancelada`);
-                isConnecting = false;
-            }
-        }, 1000);
-        
-    } catch (error) {
-        console.error('Error al conectar con jugador:', error);
-        addChatMessage('Sistema', `Error al conectar: ${error.message}`);
-        isConnecting = false;
-    }
-}
-
-// Actualizar lista de jugadores
-function refreshPlayers() {
-    if (socket && socket.connected) {
-        socket.emit('get-clients');
-    }
-}
-
-// Solicitar actualización de lista de partidas
-function refreshGames() {
-    if (socket && socket.connected) {
-        socket.emit('get-games');
-    }
-}
-
-// Renderizar lista de jugadores
-function renderPlayersList(players) {
-    if (!players || players.length === 0) {
-        playersList.innerHTML = '<p class="text-muted">No hay jugadores conectados</p>';
+// Función para conectar a un peer
+function connectToPeer(socketId) {
+    if (isConnecting) {
+        console.log('Ya hay una conexión en progreso. Espera un momento.');
         return;
     }
     
-    let html = `
-        <div class="alert alert-info mb-2">
-            <small>Esta sección muestra todos los jugadores conectados. Puedes establecer conexiones P2P directas con ellos.</small>
-        </div>`;
+    isConnecting = true;
+    console.log(`Iniciando conexión con: ${socketId}`);
     
-    players.forEach(player => {
-        // No mostrar al jugador actual
-        if (player.id === currentUser?.id) return;
-        
-        // Verificar si ya existe una conexión P2P con este jugador
-        const connection = p2pConnections[player.id];
-        const connectionState = connection ? connection.connectionState : null;
-        
-        // Determinar el texto y la clase del botón según el estado
-        let buttonText = 'Conectar';
-        let buttonClass = 'btn-primary';
-        let isDisabled = false;
-        
-        if (connectionState === 'connecting') {
-            buttonText = 'Conectando...';
-            buttonClass = 'btn-warning';
-            isDisabled = true;
-        } else if (connectionState === 'connected') {
-            buttonText = 'Conectado';
-            buttonClass = 'btn-success';
-            isDisabled = true;
-        } else if (connectionState === 'disconnected' || connectionState === 'failed') {
-            buttonText = 'Reconectar';
-            buttonClass = 'btn-danger';
-        }
-        
-        // Agregar el botón de conexión con el estado apropiado
-        html += `
-            <div class="game-card d-flex justify-content-between align-items-center">
-                <div>${player.username}</div>
-                <button class="btn btn-sm ${buttonClass} connect-player" 
-                    data-id="${player.id}" ${isDisabled ? 'disabled' : ''}>
-                    ${buttonText}
-                </button>
-            </div>
-        `;
-    });
+    const peerConnection = createPeerConnection(socketId, true);
     
-    if (html === '') {
-        playersList.innerHTML = '<p class="text-muted">No hay otros jugadores conectados</p>';
-    } else {
-        playersList.innerHTML = html;
-        
-        // Agregar eventos a los botones de conexión
-        document.querySelectorAll('.connect-player').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const playerId = e.target.getAttribute('data-id');
-                connectToPlayer(playerId);
-                
-                // Actualizar inmediatamente el estado visual del botón
-                e.target.textContent = 'Conectando...';
-                e.target.classList.remove('btn-primary', 'btn-danger');
-                e.target.classList.add('btn-warning');
-                e.target.disabled = true;
-                
-                // Programar una actualización de la lista después de un tiempo
-                setTimeout(() => refreshPlayers(), 2000);
+    // Crear y enviar oferta
+    peerConnection.createOffer()
+        .then(offer => peerConnection.setLocalDescription(offer))
+        .then(() => {
+            console.log('Enviando oferta WebRTC');
+            socket.emit('webrtc-offer', {
+                target: socketId,
+                offer: peerConnection.localDescription
             });
+            
+            // Actualizar botón en UI
+            renderPlayersList();
+            
+            // Establecer timeout para la conexión
+            setTimeout(() => {
+                if (peerConnection.connectionState !== 'connected') {
+                    console.log('Timeout de conexión alcanzado.');
+                    isConnecting = false;
+                    
+                    if (peerConnection.connectionState === 'connecting' || 
+                        peerConnection.connectionState === 'new') {
+                        addChatMessage('La conexión ha tardado demasiado. Por favor, intenta nuevamente.', 'warning');
+                        peerConnection.close();
+                        delete peerConnections[socketId];
+                        renderPlayersList();
+                    }
+                }
+            }, 30000);
+        })
+        .catch(error => {
+            console.error('Error al crear oferta WebRTC:', error);
+            addChatMessage(`Error al iniciar conexión P2P: ${error.message}`, 'error');
+            isConnecting = false;
+            renderPlayersList();
         });
-    }
 }
 
-// Renderizar lista de jugadores en la partida
-function renderGamePlayersList(players) {
-    if (!players || players.length === 0) {
-        gamePlayersList.innerHTML = '<p class="text-muted">No hay jugadores en la partida</p>';
-        return;
-    }
+// Función para enviar mensaje de chat
+function sendChatMessage() {
+    const messageInput = document.getElementById('chat-input');
+    const message = messageInput.value.trim();
     
-    let html = '';
-    
-    players.forEach(player => {
-        const isCurrentUser = player.id === currentUser?.id;
-        html += `
-            <div class="game-card d-flex justify-content-between align-items-center">
-                <div>${player.username} ${isCurrentUser ? '(Tú)' : ''}</div>
-                <span class="badge bg-success">Conectado</span>
-            </div>
-        `;
-    });
-    
-    gamePlayersList.innerHTML = html;
-}
-
-// Crear una nueva partida
-createGameBtn.addEventListener('click', () => {
-    if (!socket || !socket.connected) {
-        alert('No estás conectado al servidor');
-        return;
-    }
-    
-    addChatMessage('Sistema', 'Creando nueva partida de juego en el lobby...');
-    console.log('Solicitando crear partida');
-    
-    // Crear nueva sala en el servidor - el servidor enviará automáticamente las actualizaciones
-    socket.emit('create-game');
-});
-
-// Renderizar lista de partidas disponibles
-function renderGamesList(games) {
-    console.log('Renderizando lista de partidas:', games);
-    
-    if (!games || games.length === 0) {
-        gamesList.innerHTML = '<p class="text-muted">No hay partidas disponibles</p>';
-        return;
-    }
-    
-    let html = '';
-    
-    games.forEach(game => {
-        const playerCount = game.players ? game.players.length : 0;
-        const gameIdShort = game.id.substring(0, 8);
-        
-        // Verificar si el usuario actual es dueño o ya está en esta partida
-        const isOwner = game.players.some(player => player.id === currentUser?.id);
-        
-        html += `
-            <div class="game-card d-flex justify-content-between align-items-center">
-                <div>Partida #${gameIdShort} (${playerCount}/${game.maxPlayers} jugadores)</div>`;
-                
-        if (isOwner) {
-            // Si es dueño, mostrar un indicador en lugar del botón
-            html += `<span class="badge bg-success">Tu partida</span>`;
-        } else {
-            // Si no es dueño, mostrar el botón para unirse
-            html += `<button class="btn btn-sm btn-primary join-game" data-id="${game.id}">Unirse</button>`;
-        }
-        
-        html += `</div>`;
-    });
-    
-    gamesList.innerHTML = html;
-    
-    // Agregar eventos a los botones de unirse
-    document.querySelectorAll('.join-game').forEach(button => {
-        button.addEventListener('click', (e) => {
-            const gameId = e.target.getAttribute('data-id');
-            joinGame(gameId);
-        });
-    });
-}
-
-// Unirse a una partida existente
-function joinGame(gameId) {
-    if (!socket || !socket.connected) {
-        alert('No estás conectado al servidor');
-        return;
-    }
-    
-    addChatMessage('Sistema', `Uniéndose a la partida #${gameId.substring(0, 8)}...`);
-    
-    // Enviar solicitud para unirse a la partida
-    socket.emit('join-game', { gameId });
-    
-    // Cambiar a la pestaña de juego
-    gameTabEl.show();
-}
-
-// Refrescar lista de jugadores
-refreshPlayersBtn.addEventListener('click', () => {
-    refreshPlayers();
-    refreshGames();
-});
-
-// Enviar mensaje de chat
-sendChatBtn.addEventListener('click', () => {
-    const message = chatInput.value.trim();
     if (!message) return;
     
-    sendChatMessage(message);
-    chatInput.value = '';
-});
-
-// Al presionar Enter en el chat
-chatInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        const message = chatInput.value.trim();
-        if (!message) return;
-        
-        sendChatMessage(message);
-        chatInput.value = '';
-    }
-});
-
-// Enviar mensaje de chat a todos los peers
-function sendChatMessage(text) {
-    if (!currentUser) return;
+    // Limpiar input
+    messageInput.value = '';
     
-    // Si no estamos en una sala, mostrar error
-    if (!currentRoom || !currentRoom.id) {
-        addChatMessage('Sistema', 'No estás en una partida. Crea o únete a una partida para chatear.');
+    // Añadir mensaje local
+    addChatMessage(`Tú: ${message}`);
+    
+    // Enviar a todos los peers conectados
+    const activePeerCount = Object.values(peerConnections).filter(pc => 
+        pc.connectionState === 'connected' || pc.iceConnectionState === 'connected'
+    ).length;
+    
+    if (activePeerCount === 0) {
+        addChatMessage('No hay jugadores conectados para enviar el mensaje.', 'warning');
         return;
     }
     
-    console.log('Enviando mensaje a sala:', currentRoom.id);
-    
-    // Enviar mensaje a través del servidor
-    socket.emit('chat-message', {
-        roomId: currentRoom.id,
-        message: text
+    // Enviar mensaje a través de todos los canales de datos activos
+    Object.entries(dataChannels).forEach(([socketId, channel]) => {
+        if (channel.readyState === 'open') {
+            channel.send(JSON.stringify({
+                type: 'chat',
+                username,
+                message
+            }));
+        }
     });
-    
-    // NO mostrar mensaje localmente aquí, se mostrará cuando llegue del servidor
-    // Esto evita la duplicación
 }
 
-// Agregar mensaje al chat con opción para estilo propio
-function addChatMessage(username, text, isOwnMessage = false) {
-    const messageEl = document.createElement('div');
-    messageEl.className = 'mb-2';
+// Función para renderizar la lista de jugadores
+function renderPlayersList(users = []) {
+    const playersListContainer = document.getElementById('players-list');
     
-    // Añadir clase especial si es un mensaje propio
-    if (isOwnMessage) {
-        messageEl.className += ' own-message';
-    }
-    
-    messageEl.innerHTML = `<strong>${username}:</strong> ${text}`;
-    chatBox.appendChild(messageEl);
-    
-    // Scroll al final
-    chatBox.scrollTop = chatBox.scrollHeight;
-}
-
-// Lanzar Warcraft
-launchGameBtn.addEventListener('click', async () => {
-    const warcraftPath = warcraftPathInput.value;
-    
-    if (!warcraftPath) {
-        alert('Por favor, selecciona la ruta del ejecutable de Warcraft');
+    // Si no se proporciona lista de usuarios, usar la última conocida
+    if (!users || users.length === 0) {
+        console.log('No hay información de usuarios disponible.');
         return;
     }
     
-    try {
-        // Verificar si estamos en una partida
-        if (!currentRoom || !currentRoom.id) {
-            alert('Debes estar en una partida para iniciar Warcraft');
-            return;
-        }
-        
-        // Determinar si somos el host o un jugador que se unió
-        const isHost = currentRoom.players && currentRoom.players.length > 0 
-                      && currentRoom.players[0].id === currentUser.id;
-        
-        // Configurar los parámetros para iniciar Warcraft
-        const warcraftOptions = {
-            path: warcraftPath,
-            isHost: isHost,
-            gameId: currentRoom.id.substring(0, 8),  // Usar parte del ID como nombre de partida
-            playerName: currentUser.username
-        };
-        
-        addChatMessage('Sistema', `Iniciando Warcraft III como ${isHost ? 'host' : 'jugador'}...`);
-        
-        // Enviar un mensaje a todos los jugadores en la partida
-        if (currentRoom && currentRoom.players.length > 1) {
-            socket.emit('game-started', { 
-                roomId: currentRoom.id,
-                isHost: isHost,
-                gameName: warcraftOptions.gameId
-            });
-        }
-        
-        // Iniciar Warcraft con las opciones configuradas
-        const result = await window.ipcRenderer.invoke('launch-warcraft-with-options', warcraftOptions);
-        
-        if (result) {
-            addChatMessage('Sistema', `Warcraft III iniciado correctamente. ${isHost ? 'Creando' : 'Buscando'} partida LAN "${warcraftOptions.gameId}"`);
+    // Crear HTML para la lista
+    let html = '<div class="list-group">';
+    
+    users.forEach(user => {
+        if (user.socketId === localSocketId) {
+            html += `
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>${user.username}</strong> (Tú)
+                    </div>
+                </div>
+            `;
+        } else {
+            let buttonClass = 'btn-primary';
+            let buttonText = 'Conectar';
+            let disabled = '';
             
-            // Instrucciones específicas según si es host o no
-            if (isHost) {
-                addChatMessage('Sistema', 'Instrucciones para host: Selecciona "Red local (LAN)" y crea una partida con el nombre indicado.');
-            } else {
-                addChatMessage('Sistema', 'Instrucciones: Selecciona "Red local (LAN)" y busca la partida con el nombre indicado.');
+            // Verificar si existe una conexión con este usuario
+            if (peerConnections[user.socketId]) {
+                const connState = peerConnections[user.socketId].connectionState;
+                const iceState = peerConnections[user.socketId].iceConnectionState;
+                
+                if (connState === 'connected' || iceState === 'connected') {
+                    buttonClass = 'btn-success';
+                    buttonText = 'Conectado';
+                    disabled = 'disabled';
+                } else if (connState === 'connecting' || iceState === 'checking') {
+                    buttonClass = 'btn-warning';
+                    buttonText = 'Conectando...';
+                    disabled = 'disabled';
+                } else if (connState === 'failed' || connState === 'disconnected' || 
+                          iceState === 'failed' || iceState === 'disconnected') {
+                    buttonClass = 'btn-danger';
+                    buttonText = 'Reconectar';
+                }
             }
             
-            // Deshabilitar el botón después de iniciar
-            launchGameBtn.disabled = true;
-        } else {
-            alert('Error al iniciar Warcraft');
+            // Si estamos en proceso de conexión, deshabilitar el botón
+            if (isConnecting) {
+                disabled = 'disabled';
+            }
+            
+            html += `
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>${user.username}</div>
+                    <button class="btn ${buttonClass} btn-sm connect-button" 
+                        data-socket-id="${user.socketId}" ${disabled}>${buttonText}</button>
+                </div>
+            `;
         }
-    } catch (error) {
-        alert('Error al iniciar Warcraft: ' + error.message);
-    }
-});
+    });
+    
+    html += '</div>';
+    playersListContainer.innerHTML = html;
+    
+    // Agregar event listeners a los botones de conexión
+    document.querySelectorAll('.connect-button').forEach(button => {
+        button.addEventListener('click', () => {
+            const socketId = button.getAttribute('data-socket-id');
+            if (socketId) {
+                connectToPeer(socketId);
+                
+                // Actualizar aspecto del botón inmediatamente
+                button.textContent = 'Conectando...';
+                button.classList.remove('btn-primary', 'btn-danger');
+                button.classList.add('btn-warning');
+                button.disabled = true;
+            }
+        });
+    });
+}
 
-// Abandonar partida
-leaveGameBtn.addEventListener('click', () => {
-    if (!socket || !socket.connected) {
+// Función para actualizar el botón de inicio
+function updateLaunchButton() {
+    const launchButton = document.getElementById('launch-button');
+    const warcraftPathInput = document.getElementById('warcraft-path');
+    warcraftPath = warcraftPathInput.value.trim();
+    
+    // Verificar si hay al menos una conexión P2P activa
+    const hasActiveConnections = Object.values(peerConnections).some(pc => 
+        pc.connectionState === 'connected' || pc.iceConnectionState === 'connected'
+    );
+    
+    // Habilitar el botón solo si hay una ruta de Warcraft y al menos una conexión activa
+    if (warcraftPath && hasActiveConnections) {
+        launchButton.disabled = false;
+        addChatMessage('Ahora puedes iniciar Warcraft III para jugar con tu compañero.', 'success');
+    } else {
+        launchButton.disabled = true;
+    }
+}
+
+// Función para añadir mensaje al chat
+function addChatMessage(message, type = '') {
+    const chatMessages = document.getElementById('chat-messages');
+    const messageElement = document.createElement('div');
+    messageElement.className = 'chat-message';
+    
+    if (type) {
+        messageElement.classList.add(type);
+    }
+    
+    messageElement.textContent = message;
+    chatMessages.appendChild(messageElement);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    // Si no estamos en la pestaña de chat, añadir indicador visual
+    if (!document.getElementById('chat-tab').classList.contains('active')) {
+        document.getElementById('chat-tab').classList.add('text-danger');
+    }
+}
+
+// Función para iniciar heartbeat
+function startHeartbeat() {
+    if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+    }
+    
+    heartbeatInterval = setInterval(() => {
+        // Verificar si hemos recibido heartbeat en los últimos 20 segundos
+        const now = Date.now();
+        if (now - lastReceivedHeartbeat > 20000) {
+            console.log('No se ha recibido heartbeat en los últimos 20 segundos.');
+            
+            // Si el socket parece conectado pero no recibimos heartbeat, forzar reconexión
+            if (socket && socket.connected) {
+                console.log('Forzando reconexión debido a falta de heartbeat');
+                socket.disconnect();
+                scheduleReconnection();
+            }
+        }
+    }, 10000);
+}
+
+// Función para lanzar Warcraft III
+function launchWarcraftIII() {
+    if (!warcraftPath) {
+        addChatMessage('Por favor, configura la ruta de Warcraft III primero.', 'warning');
         return;
     }
     
-    if (currentRoom) {
-        socket.emit('leave-game', { roomId: currentRoom.id });
-        currentRoom = null;
-        updateLaunchButton();
+    // Verificar si hay al menos una conexión P2P activa
+    const hasActiveConnections = Object.values(peerConnections).some(pc => 
+        pc.connectionState === 'connected' || pc.iceConnectionState === 'connected'
+    );
+    
+    if (!hasActiveConnections) {
+        addChatMessage('Debes estar conectado con al menos un jugador para iniciar el juego.', 'warning');
+        return;
     }
     
-    // Cerrar todas las conexiones P2P
-    Object.values(p2pConnections).forEach(connection => {
-        connection.close();
+    // Enviar mensaje a todos los peers
+    Object.entries(dataChannels).forEach(([socketId, channel]) => {
+        if (channel.readyState === 'open') {
+            channel.send(JSON.stringify({
+                type: 'system',
+                message: `${username} ha iniciado Warcraft III`
+            }));
+        }
     });
-    p2pConnections = {};
     
-    // Cambiar a la pestaña de lobby
-    lobbyTabEl.show();
+    // Iniciar el juego
+    addChatMessage('Iniciando Warcraft III...', 'info');
+    window.api.send('launch-warcraft', warcraftPath);
+}
+
+// Event listeners
+document.addEventListener('DOMContentLoaded', () => {
+    // Botón de conexión
+    document.getElementById('connect-button').addEventListener('click', connectToServer);
+    
+    // Botón de desconexión
+    document.getElementById('disconnect-button').addEventListener('click', () => {
+        // Cerrar todas las conexiones P2P
+        Object.values(peerConnections).forEach(pc => pc.close());
+        peerConnections = {};
+        dataChannels = {};
+        
+        // Desconectar socket
+        if (socket) {
+            socket.disconnect();
+        }
+        
+        // Restablecer UI
+        document.getElementById('connection-form').style.display = 'block';
+        document.getElementById('game-info').style.display = 'none';
+        document.getElementById('connect-button').disabled = false;
+        
+        // Limpiar variables
+        knownPeers.clear();
+        isConnecting = false;
+        
+        // Detener heartbeat
+        clearInterval(heartbeatInterval);
+        
+        // Detener reconexión programada
+        if (reconnectTimeoutId) {
+            clearTimeout(reconnectTimeoutId);
+            reconnectTimeoutId = null;
+        }
+        
+        updateConnectionBanner('disconnected', 'Desconectado del servidor');
+        setTimeout(() => {
+            const banner = document.getElementById('connection-banner');
+            if (banner) banner.style.display = 'none';
+        }, 3000);
+    });
+    
+    // Botón de envío de chat
+    document.getElementById('send-button').addEventListener('click', sendChatMessage);
+    
+    // Enviar mensaje con Enter
+    document.getElementById('chat-input').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            sendChatMessage();
+        }
+    });
+    
+    // Botón de lanzamiento de Warcraft
+    document.getElementById('launch-button').addEventListener('click', launchWarcraftIII);
+    
+    // Cambio en la ruta de Warcraft
+    document.getElementById('warcraft-path').addEventListener('input', updateLaunchButton);
+    
+    // Cambio de pestaña
+    document.querySelectorAll('.nav-link').forEach(tab => {
+        tab.addEventListener('click', () => {
+            // Si cambiamos a la pestaña de chat, eliminar indicador visual
+            if (tab.id === 'chat-tab') {
+                tab.classList.remove('text-danger');
+            }
+        });
+    });
+    
+    // Detección de cambios de red
+    setInterval(() => {
+        const currentNetworkState = navigator.onLine;
+        if (currentNetworkState !== lastNetworkState) {
+            lastNetworkState = currentNetworkState;
+            if (currentNetworkState) {
+                console.log('Red conectada (verificación periódica)');
+                // Si el socket está desconectado, intentar reconectar
+                if (socket && !socket.connected) {
+                    reconnectAttempt = 0;
+                    scheduleReconnection();
+                }
+            } else {
+                console.log('Red desconectada (verificación periódica)');
+                updateConnectionBanner('disconnected', 'Sin conexión a Internet');
+            }
+        }
+    }, 5000);
 });
 
-// Mostrar solución de problemas
-troubleshootingLink.addEventListener('click', (e) => {
-    e.preventDefault();
-    window.ipcRenderer.invoke('open-troubleshooting');
+// Eventos recibidos desde el proceso principal
+window.api.receive('warcraft-launched', (success, error) => {
+    if (success) {
+        addChatMessage('Warcraft III iniciado correctamente.', 'success');
+    } else {
+        addChatMessage(`Error al iniciar Warcraft III: ${error}`, 'error');
+    }
+});
+
+// Autoconectar si hay parámetros en la URL
+document.addEventListener('DOMContentLoaded', () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const autoServer = urlParams.get('server');
+    const autoUser = urlParams.get('user');
+    const autoRoom = urlParams.get('room');
+    
+    if (autoServer && autoUser && autoRoom) {
+        document.getElementById('server-address').value = autoServer;
+        document.getElementById('username').value = autoUser;
+        document.getElementById('room-id').value = autoRoom;
+        
+        // Conectar automáticamente después de un breve retraso
+        setTimeout(() => {
+            connectToServer();
+        }, 500);
+    }
 }); 
