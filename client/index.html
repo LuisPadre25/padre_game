@@ -48,6 +48,33 @@
       border: 1px solid #1e4976;
       border-radius: 5px;
     }
+    /* Estilos mejorados para mensajes de chat */
+    #chat-box div {
+      padding: 5px 8px;
+      margin-bottom: 6px;
+      border-radius: 8px;
+      background-color: #132f4c;
+      word-wrap: break-word;
+    }
+    /* Estilo para mensajes propios */
+    #chat-box .own-message {
+      background-color: #0d4714;
+      text-align: right;
+      border-left: none;
+      border-right: 3px solid #4caf50;
+    }
+    /* Estilo para mensajes del sistema */
+    #chat-box div strong:first-child:contains('Sistema') + * {
+      color: #ff9800;
+    }
+    /* Estilo para nuevos mensajes - animación de entrada */
+    @keyframes newMessage {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    #chat-box div:last-child {
+      animation: newMessage 0.3s ease-out;
+    }
     .nav-tabs .nav-link {
       color: #ddd;
     }

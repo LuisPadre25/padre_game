@@ -356,9 +356,24 @@ function setupSocketEvents(username) {
         }
     });
     
-    // Evento de mensaje de chat
+    // Evento de mensaje de chat - mejoramos la identificación del remitente
     socket.on('chat-message', (data) => {
-        addChatMessage(data.username, data.message);
+        // Verificar si ya existe una entrada igual en los últimos mensajes para evitar duplicados
+        const lastMessages = Array.from(chatBox.querySelectorAll('div')).slice(-5);
+        const isDuplicate = lastMessages.some(el => 
+            el.innerHTML === `<strong>${data.username}:</strong> ${data.message}`
+        );
+        
+        if (!isDuplicate) {
+            // Identificar si el mensaje es propio
+            const isOwnMessage = data.username === currentUser?.username;
+            
+            // Añadir el mensaje al chat con estilo diferente si es propio
+            addChatMessage(data.username, data.message, isOwnMessage);
+            
+            // Scroll al final para asegurar que siempre se vea el último mensaje
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
     });
     
     // Evento cuando Warcraft es iniciado
@@ -889,14 +904,20 @@ function sendChatMessage(text) {
         message: text
     });
     
-    // Mostrar mensaje localmente
-    addChatMessage(currentUser.username, text);
+    // NO mostrar mensaje localmente aquí, se mostrará cuando llegue del servidor
+    // Esto evita la duplicación
 }
 
-// Agregar mensaje al chat
-function addChatMessage(username, text) {
+// Agregar mensaje al chat con opción para estilo propio
+function addChatMessage(username, text, isOwnMessage = false) {
     const messageEl = document.createElement('div');
     messageEl.className = 'mb-2';
+    
+    // Añadir clase especial si es un mensaje propio
+    if (isOwnMessage) {
+        messageEl.className += ' own-message';
+    }
+    
     messageEl.innerHTML = `<strong>${username}:</strong> ${text}`;
     chatBox.appendChild(messageEl);
     

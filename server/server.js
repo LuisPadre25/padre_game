@@ -199,16 +199,32 @@ io.on('connection', (socket) => {
   
   // Manejar mensajes de chat en una sala
   socket.on('chat-message', (data) => {
-    const { roomId, message } = data;
-    const clientInfo = connectedClients.get(socket.id);
-    
-    if (!clientInfo) return;
-    
-    // Enviar mensaje a todos los jugadores en la sala
-    io.to(roomId).emit('chat-message', {
-      username: clientInfo.username,
-      message
-    });
+    try {
+      const { roomId, message } = data;
+      const clientInfo = connectedClients.get(socket.id);
+      
+      if (!clientInfo || !roomId) return;
+      
+      console.log(`Mensaje de chat recibido de ${clientInfo.username} en sala ${roomId}: ${message.substring(0, 30)}...`);
+      
+      // Obtener la sala
+      const room = gameRooms.get(roomId);
+      if (!room) {
+        console.error(`Error: Sala ${roomId} no encontrada`);
+        return;
+      }
+      
+      // Enviar mensaje a todos los jugadores en la sala (incluyendo el remitente)
+      io.to(roomId).emit('chat-message', {
+        username: clientInfo.username,
+        message: message
+      });
+      
+      console.log(`Mensaje enviado a ${room.players.size} jugadores en sala ${roomId}`);
+    } catch (error) {
+      console.error('Error al procesar mensaje de chat:', error);
+      socket.emit('error', { message: 'Error al enviar mensaje' });
+    }
   });
   
   // Notificar inicio de juego
