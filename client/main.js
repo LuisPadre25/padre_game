@@ -4,6 +4,9 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const os = require('os');
 
+// Eliminar intentos de cargar robotjs
+// const robot = null;  // No más robotjs
+
 // Desactivar aceleración de hardware para evitar errores en versiones Windows N/KN
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-features', 'MediaFoundation');
@@ -95,6 +98,174 @@ ipcMain.handle('launch-warcraft', async (event, warcraftPath) => {
     warcraftProcess.on('close', (code) => {
       mainWindow.webContents.send('warcraft-closed', code);
       warcraftProcess = null;
+    });
+    
+    return true;
+  } catch (error) {
+    mainWindow.webContents.send('warcraft-error', error.message);
+    return false;
+  }
+});
+
+// Iniciar Warcraft con opciones avanzadas para automatizar la creación o unión a partidas
+ipcMain.handle('launch-warcraft-with-options', async (event, options) => {
+  try {
+    // Extraer las opciones
+    const { path: warcraftPath, isHost, gameId, playerName } = options;
+    
+    // Si hay un proceso de Warcraft en ejecución, cerrarlo
+    if (warcraftProcess && !warcraftProcess.killed) {
+      warcraftProcess.kill();
+    }
+    
+    // El nombre de usuario para Warcraft debe tener entre 3 y 15 caracteres
+    const sanitizedPlayerName = (playerName || 'Player').substring(0, 15);
+    
+    // El ID de la partida debe tener entre 3 y 12 caracteres
+    const sanitizedGameId = (gameId || 'Game').substring(0, 12);
+    
+    // Preparar los argumentos para Warcraft
+    const warcraftArgs = [];
+    
+    // Crear una ventana de instrucciones detalladas
+    const instructionsWindow = new BrowserWindow({
+      width: 600,
+      height: 500,
+      parent: mainWindow,
+      modal: true,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false
+      }
+    });
+    
+    // Crear contenido HTML con instrucciones detalladas
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Instrucciones para Warcraft III</title>
+        <style>
+          body { 
+            font-family: Arial, sans-serif; 
+            padding: 20px; 
+            background-color: #0a1929; 
+            color: #ddd;
+          }
+          h1 { color: #4caf50; text-align: center; }
+          h2 { color: #ff9800; margin-top: 20px; }
+          .step { 
+            margin-bottom: 15px; 
+            padding: 15px; 
+            background-color: #132f4c;
+            border-radius: 5px;
+            border-left: 5px solid #0059b2;
+          }
+          .important {
+            background-color: #302a24;
+            border-left: 5px solid #ff9800;
+            padding: 10px;
+            margin: 15px 0;
+          }
+          img { max-width: 100%; margin: 10px 0; }
+          .close-btn {
+            display: block;
+            width: 80%;
+            margin: 20px auto;
+            padding: 10px;
+            background-color: #0059b2;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+          }
+          .close-btn:hover {
+            background-color: #0069d9;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>${isHost ? 'Crear partida LAN' : 'Unirse a partida LAN'}</h1>
+        
+        <div class="important">
+          <p><strong>IMPORTANTE:</strong> Warcraft III se iniciará automáticamente. Sigue estos pasos exactamente.</p>
+        </div>
+        
+        <h2>Paso 1: Configurar tu nombre de jugador</h2>
+        <div class="step">
+          <p>1. Haz clic en el botón <strong>Opciones</strong> del menú principal</p>
+          <p>2. Haz clic en la pestaña <strong>Configuración del jugador</strong></p>
+          <p>3. Escribe tu nombre: <strong>${sanitizedPlayerName}</strong></p>
+          <p>4. Haz clic en <strong>Aceptar</strong> para guardar los cambios</p>
+          <p>5. Vuelve al <strong>Menú principal</strong></p>
+        </div>
+        
+        <h2>Paso 2: ${isHost ? 'Crear una partida' : 'Unirse a la partida'}</h2>
+        <div class="step">
+          <p>1. Haz clic en el botón <strong>Red local (LAN)</strong></p>
+          ${isHost ?
+            `<p>2. Haz clic en <strong>Crear partida</strong></p>
+             <p>3. Escribe el nombre exacto: <strong>${sanitizedGameId}</strong></p>
+             <p>4. Haz clic en <strong>Crear</strong></p>
+             <p>5. <strong>¡Importante!</strong> Espera a que los demás jugadores se unan</p>` :
+            
+            `<p>2. Haz clic en <strong>Unirse a partida</strong></p>
+             <p>3. Busca y selecciona la partida con el nombre: <strong>${sanitizedGameId}</strong></p>
+             <p>4. Si no aparece inmediatamente, espera unos segundos y haz clic en <strong>Actualizar</strong></p>
+             <p>5. Haz clic en <strong>Unirse</strong> cuando encuentres la partida</p>`
+          }
+        </div>
+        
+        <div class="important">
+          <p><strong>Nota:</strong> Estas instrucciones se mantendrán visibles mientras configuras Warcraft III.</p>
+          <p>Puedes cerrar esta ventana una vez que hayas completado los pasos.</p>
+        </div>
+        
+        <button class="close-btn" onclick="window.close()">Cerrar cuando hayas completado los pasos</button>
+      </body>
+      </html>
+    `;
+    
+    // Crear archivo HTML temporal
+    const tempHtmlPath = path.join(app.getPath('temp'), 'warcraft-instructions.html');
+    fs.writeFileSync(tempHtmlPath, htmlContent);
+    
+    // Cargar las instrucciones
+    instructionsWindow.loadFile(tempHtmlPath);
+    instructionsWindow.setAlwaysOnTop(true);
+    
+    // Iniciar Warcraft
+    warcraftProcess = spawn(warcraftPath, warcraftArgs, {
+      detached: false
+    });
+    
+    // Manejar errores
+    warcraftProcess.on('error', (error) => {
+      mainWindow.webContents.send('warcraft-error', error.message);
+      return false;
+    });
+    
+    // Manejar cierre
+    warcraftProcess.on('close', (code) => {
+      mainWindow.webContents.send('warcraft-closed', code);
+      warcraftProcess = null;
+      
+      // Cerrar ventana de instrucciones si sigue abierta
+      if (!instructionsWindow.isDestroyed()) {
+        instructionsWindow.close();
+      }
+    });
+    
+    // Enviar instrucciones al usuario
+    mainWindow.webContents.send('warcraft-launched', {
+      isHost: isHost,
+      gameName: sanitizedGameId,
+      playerName: sanitizedPlayerName,
+      instructions: isHost 
+        ? 'Sigue las instrucciones para crear una partida LAN con nombre: ' + sanitizedGameId
+        : 'Sigue las instrucciones para buscar la partida LAN con nombre: ' + sanitizedGameId
     });
     
     return true;

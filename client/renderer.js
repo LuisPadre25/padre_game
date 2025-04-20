@@ -65,20 +65,13 @@ function updateLaunchButton() {
     // Verificar si tenemos una ruta de Warcraft válida
     const hasWarcraftPath = !!warcraftPathInput.value;
     
-    // Verificar si tenemos al menos una conexión P2P activa
-    const hasActivePeerConnection = Object.values(p2pConnections).some(conn => 
-        conn.connectionState === 'connected' && conn.dataChannel && conn.dataChannel.readyState === 'open'
-    );
-    
-    // Habilitar el botón si se cumplen ambas condiciones
-    if (hasWarcraftPath && hasActivePeerConnection) {
+    // Habilitar el botón si tenemos la ruta de Warcraft
+    if (hasWarcraftPath) {
         launchGameBtn.disabled = false;
         addChatMessage('Sistema', `El botón "Iniciar Warcraft III" ha sido habilitado. Puedes lanzar el juego ahora.`);
     } else {
         launchGameBtn.disabled = true;
     }
-    
-    console.log(`Estado del botón de lanzamiento: ${!launchGameBtn.disabled} (Path: ${hasWarcraftPath}, Connection: ${hasActivePeerConnection})`);
 }
 
 // Conectar al servidor
@@ -163,8 +156,9 @@ function setupSocketEvents(username) {
         // Cambiar a la pestaña de lobby
         lobbyTabEl.show();
         
-        // Actualizar lista de jugadores
+        // Actualizar lista de jugadores y partidas
         refreshPlayers();
+        refreshGames();
     });
     
     // Evento disconnect
@@ -192,19 +186,43 @@ function setupSocketEvents(username) {
         renderPlayersList(clients);
     });
     
+    // Evento de actualización de lista de partidas
+    socket.on('games-list', (games) => {
+        console.log('Lista de partidas recibida:', games);
+        renderGamesList(games);
+    });
+    
     // Evento de actualización de sala
     socket.on('room-updated', (roomData) => {
-        currentRoom = roomData;
-        renderGamePlayersList(roomData.players);
-        updateLaunchButton();
+        console.log('Datos de sala recibidos:', roomData);
         
-        // Si es el host y hay 2 jugadores, habilitar el botón de lanzamiento
-        if (roomData.players.length >= 2) {
-            launchGameBtn.disabled = false;
-        }
+        // Verificar formato de datos recibidos
+        if (!roomData) return;
+        
+        // Compatibilidad con diferentes formatos
+        currentRoom = {
+            id: roomData.id || roomData.roomId,
+            players: roomData.players || []
+        };
+        
+        console.log('Sala actualizada:', currentRoom);
+        
+        // Renderizar jugadores en la sala
+        renderGamePlayersList(currentRoom.players);
+        
+        // Habilitar el chat y el botón de lanzar juego inmediatamente
+        chatInput.disabled = false;
+        sendChatBtn.disabled = false;
+        updateLaunchButton();
         
         // Cambiar a la pestaña de juego
         gameTabEl.show();
+        
+        // Notificar sobre la partida
+        addChatMessage('Sistema', 'Estás en una partida. Puedes chatear y lanzar Warcraft III.');
+        
+        // Actualizar la lista de partidas
+        refreshGames();
     });
     
     // Evento de error en el registro
@@ -338,6 +356,41 @@ function setupSocketEvents(username) {
         }
     });
     
+    // Evento de mensaje de chat
+    socket.on('chat-message', (data) => {
+        addChatMessage(data.username, data.message);
+    });
+    
+    // Evento cuando Warcraft es iniciado
+    window.ipcRenderer.on('warcraft-launched', (event, data) => {
+        // Mostrar instrucciones específicas basadas en si es host o no
+        const roleText = data.isHost ? 'ANFITRIÓN' : 'JUGADOR';
+        
+        addChatMessage('Sistema', `[${roleText}] ${data.instructions}`);
+        addChatMessage('Sistema', `Se ha abierto una ventana con instrucciones paso a paso.`);
+        
+        // Enviar instrucciones también a través del chat a otros jugadores
+        if (currentRoom && currentRoom.id) {
+            socket.emit('chat-message', {
+                roomId: currentRoom.id,
+                message: `[${roleText}] Nombre de partida LAN: ${data.gameName}`
+            });
+        }
+    });
+    
+    // Evento de notificación de inicio de juego
+    socket.on('game-launched', (data) => {
+        const isHost = data.isHost;
+        const gameName = data.gameName;
+        
+        if (isHost) {
+            addChatMessage('Sistema', `${data.username} ha iniciado Warcraft III como ANFITRIÓN`);
+            addChatMessage('Sistema', `Debes buscar la partida LAN con nombre: ${gameName}`);
+        } else {
+            addChatMessage('Sistema', `${data.username} ha iniciado Warcraft III y se unirá a tu partida`);
+        }
+    });
+    
     // Eventos para errores y cierre de Warcraft
     window.ipcRenderer.on('warcraft-error', (event, message) => {
         alert('Error al iniciar Warcraft: ' + message);
@@ -454,6 +507,9 @@ function setupDataChannel(dataChannel, peerId) {
         // Habilitar el input de chat
         chatInput.disabled = false;
         sendChatBtn.disabled = false;
+        
+        // Enviar mensaje de prueba
+        sendChatMessage('¡Hola! La conexión está establecida.');
     };
     
     dataChannel.onclose = () => {
@@ -612,6 +668,13 @@ function refreshPlayers() {
     }
 }
 
+// Solicitar actualización de lista de partidas
+function refreshGames() {
+    if (socket && socket.connected) {
+        socket.emit('get-games');
+    }
+}
+
 // Renderizar lista de jugadores
 function renderPlayersList(players) {
     if (!players || players.length === 0) {
@@ -619,7 +682,10 @@ function renderPlayersList(players) {
         return;
     }
     
-    let html = '';
+    let html = `
+        <div class="alert alert-info mb-2">
+            <small>Esta sección muestra todos los jugadores conectados. Puedes establecer conexiones P2P directas con ellos.</small>
+        </div>`;
     
     players.forEach(player => {
         // No mostrar al jugador actual
@@ -712,22 +778,17 @@ createGameBtn.addEventListener('click', () => {
         return;
     }
     
-    addChatMessage('Sistema', 'Creando nueva partida...');
+    addChatMessage('Sistema', 'Creando nueva partida de juego en el lobby...');
+    console.log('Solicitando crear partida');
     
-    // Crear nueva sala en el servidor
+    // Crear nueva sala en el servidor - el servidor enviará automáticamente las actualizaciones
     socket.emit('create-game');
-    
-    // Notificar al usuario
-    alert('Partida creada. Espera a que otros jugadores se unan.');
-});
-
-// Actualizar lista de partidas disponibles 
-socket.on('games-list', (games) => {
-    renderGamesList(games);
 });
 
 // Renderizar lista de partidas disponibles
 function renderGamesList(games) {
+    console.log('Renderizando lista de partidas:', games);
+    
     if (!games || games.length === 0) {
         gamesList.innerHTML = '<p class="text-muted">No hay partidas disponibles</p>';
         return;
@@ -736,12 +797,25 @@ function renderGamesList(games) {
     let html = '';
     
     games.forEach(game => {
+        const playerCount = game.players ? game.players.length : 0;
+        const gameIdShort = game.id.substring(0, 8);
+        
+        // Verificar si el usuario actual es dueño o ya está en esta partida
+        const isOwner = game.players.some(player => player.id === currentUser?.id);
+        
         html += `
             <div class="game-card d-flex justify-content-between align-items-center">
-                <div>Partida #${game.id.substring(0, 8)} (${game.players.length}/${game.maxPlayers} jugadores)</div>
-                <button class="btn btn-sm btn-primary join-game" data-id="${game.id}">Unirse</button>
-            </div>
-        `;
+                <div>Partida #${gameIdShort} (${playerCount}/${game.maxPlayers} jugadores)</div>`;
+                
+        if (isOwner) {
+            // Si es dueño, mostrar un indicador en lugar del botón
+            html += `<span class="badge bg-success">Tu partida</span>`;
+        } else {
+            // Si no es dueño, mostrar el botón para unirse
+            html += `<button class="btn btn-sm btn-primary join-game" data-id="${game.id}">Unirse</button>`;
+        }
+        
+        html += `</div>`;
     });
     
     gamesList.innerHTML = html;
@@ -766,10 +840,16 @@ function joinGame(gameId) {
     
     // Enviar solicitud para unirse a la partida
     socket.emit('join-game', { gameId });
+    
+    // Cambiar a la pestaña de juego
+    gameTabEl.show();
 }
 
 // Refrescar lista de jugadores
-refreshPlayersBtn.addEventListener('click', refreshPlayers);
+refreshPlayersBtn.addEventListener('click', () => {
+    refreshPlayers();
+    refreshGames();
+});
 
 // Enviar mensaje de chat
 sendChatBtn.addEventListener('click', () => {
@@ -795,35 +875,22 @@ chatInput.addEventListener('keypress', (e) => {
 function sendChatMessage(text) {
     if (!currentUser) return;
     
-    const message = {
-        type: 'chat',
-        username: currentUser.username,
-        text
-    };
-    
-    let messageSent = false;
-    
-    // Enviar a todos los peers
-    Object.keys(p2pConnections).forEach(peerId => {
-        const connection = p2pConnections[peerId];
-        if (connection && connection.dataChannel && connection.dataChannel.readyState === 'open') {
-            try {
-                connection.dataChannel.send(JSON.stringify(message));
-                messageSent = true;
-            } catch (error) {
-                console.error('Error al enviar mensaje:', error);
-            }
-        }
-    });
-    
-    // Mostrar localmente
-    if (messageSent) {
-        addChatMessage(currentUser.username, text);
-    } else {
-        addChatMessage('Sistema', 'No hay conexiones activas para enviar el mensaje');
+    // Si no estamos en una sala, mostrar error
+    if (!currentRoom || !currentRoom.id) {
+        addChatMessage('Sistema', 'No estás en una partida. Crea o únete a una partida para chatear.');
+        return;
     }
     
-    return messageSent;
+    console.log('Enviando mensaje a sala:', currentRoom.id);
+    
+    // Enviar mensaje a través del servidor
+    socket.emit('chat-message', {
+        roomId: currentRoom.id,
+        message: text
+    });
+    
+    // Mostrar mensaje localmente
+    addChatMessage(currentUser.username, text);
 }
 
 // Agregar mensaje al chat
@@ -847,21 +914,48 @@ launchGameBtn.addEventListener('click', async () => {
     }
     
     try {
-        // Verificar que tenemos al menos una conexión P2P activa
-        const hasActiveConnection = Object.values(p2pConnections).some(conn => 
-            conn.connectionState === 'connected' && conn.dataChannel && conn.dataChannel.readyState === 'open'
-        );
-        
-        if (!hasActiveConnection) {
-            alert('No hay conexiones P2P activas. Conéctate con otro jugador primero.');
+        // Verificar si estamos en una partida
+        if (!currentRoom || !currentRoom.id) {
+            alert('Debes estar en una partida para iniciar Warcraft');
             return;
         }
         
-        // Lanzar Warcraft
-        const result = await window.ipcRenderer.invoke('launch-warcraft', warcraftPath);
+        // Determinar si somos el host o un jugador que se unió
+        const isHost = currentRoom.players && currentRoom.players.length > 0 
+                      && currentRoom.players[0].id === currentUser.id;
+        
+        // Configurar los parámetros para iniciar Warcraft
+        const warcraftOptions = {
+            path: warcraftPath,
+            isHost: isHost,
+            gameId: currentRoom.id.substring(0, 8),  // Usar parte del ID como nombre de partida
+            playerName: currentUser.username
+        };
+        
+        addChatMessage('Sistema', `Iniciando Warcraft III como ${isHost ? 'host' : 'jugador'}...`);
+        
+        // Enviar un mensaje a todos los jugadores en la partida
+        if (currentRoom && currentRoom.players.length > 1) {
+            socket.emit('game-started', { 
+                roomId: currentRoom.id,
+                isHost: isHost,
+                gameName: warcraftOptions.gameId
+            });
+        }
+        
+        // Iniciar Warcraft con las opciones configuradas
+        const result = await window.ipcRenderer.invoke('launch-warcraft-with-options', warcraftOptions);
         
         if (result) {
-            addChatMessage('Sistema', 'Warcraft ha sido iniciado');
+            addChatMessage('Sistema', `Warcraft III iniciado correctamente. ${isHost ? 'Creando' : 'Buscando'} partida LAN "${warcraftOptions.gameId}"`);
+            
+            // Instrucciones específicas según si es host o no
+            if (isHost) {
+                addChatMessage('Sistema', 'Instrucciones para host: Selecciona "Red local (LAN)" y crea una partida con el nombre indicado.');
+            } else {
+                addChatMessage('Sistema', 'Instrucciones: Selecciona "Red local (LAN)" y busca la partida con el nombre indicado.');
+            }
+            
             // Deshabilitar el botón después de iniciar
             launchGameBtn.disabled = true;
         } else {

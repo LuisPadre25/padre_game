@@ -9,6 +9,7 @@ Cliente Electron para jugar Warcraft III utilizando conexiones P2P.
 - Comunicación P2P mediante WebRTC
 - Chat integrado entre jugadores
 - Lanzamiento directo de Warcraft III desde la aplicación
+- **¡NUEVO!** Guía interactiva para configurar partidas LAN fácilmente
 
 ## Requisitos
 
@@ -51,6 +52,11 @@ Cliente Electron para jugar Warcraft III utilizando conexiones P2P.
 
 5. Una vez que otro jugador se una a tu partida, podrás iniciar Warcraft III
 
+6. **NOVEDAD**: La aplicación ahora proporciona una guía interactiva para configurar partidas
+   - Se abre una ventana detallada con instrucciones paso a paso
+   - Los pasos varían dependiendo de si eres el anfitrión o te unes a una partida
+   - Todos los jugadores usan el mismo nombre de partida para facilitar la conexión
+
 ## Servidor
 
 El servidor está alojado en:
@@ -58,6 +64,21 @@ El servidor está alojado en:
 - Puerto: 3000
 - Ubicación: Miami
 - Características: 1 vCPU, 512MB RAM, 10GB SSD
+
+## Guía interactiva para partidas LAN
+
+La nueva función de guía interactiva simplifica el proceso de configuración de partidas LAN:
+
+1. El sistema detecta si eres el creador de la partida o si te estás uniendo
+2. Proporciona instrucciones detalladas y específicas para tu rol
+3. Se abre una ventana flotante con pasos paso a paso mientras juegas
+4. Coordina automáticamente el nombre de la partida para todos los jugadores
+
+Características principales:
+- Instrucciones visuales detalladas
+- Configuración guiada para el nombre de jugador
+- Información específica según el rol (anfitrión o jugador)
+- Sincronización de nombres de partida entre todos los participantes
 
 ## Desarrollo
 
